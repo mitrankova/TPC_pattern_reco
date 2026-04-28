@@ -18,115 +18,432 @@
 #include <pthread.h>
 
 #include <algorithm>
+#include <cmath>
+#include <deque>
 #include <iostream>
+#include <limits>
+#include <map>
 #include <stdint.h>
 #include <vector>
 
-// ====================================================================
-// InModuleThreadData constructors
-// ====================================================================
-
-InModuleThreadData::InModuleThreadData()
-  : layer(0)
-  , region(0)
-  , sector(0)
-  , side(0)
-  , hitsetkey(0)
-  , module_key(0)
-  , hitset(0)
-  , tGeometry(0)
-  , pedestal(0.0)
-  , verbosity(0)
-{
-}
-
-InModuleThreadData::HitInfo::HitInfo()
-  : layer(0)
-  , region(0)
-  , sector(0)
-  , side(0)
-  , pad(0)
-  , tbin(0)
-  , adc(0)
-{
-}
-
-// ====================================================================
-// pthread worker
-// ====================================================================
-
+// ===================================================================
+// Small C++98 helpers
+// ===================================================================
 namespace
 {
+  struct BlobAdcSort
+  {
+    const std::vector<InModuleThreadData::Blob>* blobs;
+    BlobAdcSort(const std::vector<InModuleThreadData::Blob>* b) : blobs(b) {}
+    bool operator()(unsigned int a, unsigned int b) const
+    {
+      return (*blobs)[a].adc > (*blobs)[b].adc;
+    }
+  };
+
+  double adc_weight(double adc, double maxadc, double power, double floor_frac)
+  {
+    if (adc <= 0.0) return 0.0;
+    if (maxadc <= 0.0) return 1.0;
+
+    double w = std::pow(adc / maxadc, power);
+    const double floor_w = floor_frac;
+    if (w < floor_w) w = floor_w;
+    return w;
+  }
+
+  bool weighted_line_fit(const std::vector<double>& x,
+                         const std::vector<double>& y,
+                         const std::vector<double>& w,
+                         double& m,
+                         double& b,
+                         double& chi2,
+                         int& ndof)
+  {
+    if (x.size() < 2 || x.size() != y.size() || x.size() != w.size())
+    {
+      return false;
+    }
+
+    double S = 0.0;
+    double Sx = 0.0;
+    double Sy = 0.0;
+    double Sxx = 0.0;
+    double Sxy = 0.0;
+
+    for (unsigned int i = 0; i < x.size(); ++i)
+    {
+      const double wi = w[i] > 0.0 ? w[i] : 1.0;
+      S   += wi;
+      Sx  += wi * x[i];
+      Sy  += wi * y[i];
+      Sxx += wi * x[i] * x[i];
+      Sxy += wi * x[i] * y[i];
+    }
+
+    const double den = S * Sxx - Sx * Sx;
+    if (std::fabs(den) < 1.0e-12)
+    {
+      return false;
+    }
+
+    m = (S * Sxy - Sx * Sy) / den;
+    b = (Sy - m * Sx) / S;
+
+    chi2 = 0.0;
+    for (unsigned int i = 0; i < x.size(); ++i)
+    {
+      const double wi = w[i] > 0.0 ? w[i] : 1.0;
+      const double r = y[i] - (m * x[i] + b);
+      chi2 += wi * r * r;
+    }
+
+    ndof = static_cast<int>(x.size()) - 2;
+    return true;
+  }
+
+  bool fit_track_from_blobs(const std::vector<InModuleThreadData::Blob>& blobs,
+                            const std::vector<unsigned int>& idx,
+                            double weight_power,
+                            double floor_frac,
+                            InModuleThreadData::Track& trk)
+  {
+    if (idx.size() < 2) return false;
+
+    double maxadc = 0.0;
+    for (unsigned int i = 0; i < idx.size(); ++i)
+    {
+      if (blobs[idx[i]].adc > maxadc) maxadc = blobs[idx[i]].adc;
+    }
+
+    std::vector<double> x;
+    std::vector<double> pad;
+    std::vector<double> tbin;
+    std::vector<double> w;
+    x.reserve(idx.size());
+    pad.reserve(idx.size());
+    tbin.reserve(idx.size());
+    w.reserve(idx.size());
+
+    unsigned int first_layer = 999999;
+    unsigned int last_layer = 0;
+
+    for (unsigned int i = 0; i < idx.size(); ++i)
+    {
+      const InModuleThreadData::Blob& bl = blobs[idx[i]];
+      x.push_back(static_cast<double>(bl.layer));
+      pad.push_back(bl.pad);
+      tbin.push_back(bl.tbin);
+      w.push_back(adc_weight(bl.adc, maxadc, weight_power, floor_frac));
+
+      if (bl.layer < first_layer) first_layer = bl.layer;
+      if (bl.layer > last_layer) last_layer = bl.layer;
+    }
+
+    double mp = 0.0, bp = 0.0, cp = 0.0;
+    double mt = 0.0, bt = 0.0, ct = 0.0;
+    int ndp = 0, ndt = 0;
+
+    if (!weighted_line_fit(x, pad, w, mp, bp, cp, ndp)) return false;
+    if (!weighted_line_fit(x, tbin, w, mt, bt, ct, ndt)) return false;
+
+    trk.first_layer = first_layer;
+    trk.last_layer = last_layer;
+    trk.nblobs = static_cast<unsigned int>(idx.size());
+    trk.pad_slope = mp;
+    trk.pad_intercept = bp;
+    trk.tbin_slope = mt;
+    trk.tbin_intercept = bt;
+    trk.chi2_pad = cp;
+    trk.chi2_tbin = ct;
+    trk.ndof_pad = ndp;
+    trk.ndof_tbin = ndt;
+    trk.blob_indices = idx;
+
+    return true;
+  }
+
+  void collect_raw_hits(InModuleThreadData* d)
+  {
+    d->raw_hits.clear();
+
+    for (unsigned int ihs = 0; ihs < d->layer_hitsets.size(); ++ihs)
+    {
+      TrkrHitSet* hitset = d->layer_hitsets[ihs].hitset;
+      if (!hitset) continue;
+
+      TrkrHitSet::ConstRange range = hitset->getHits();
+      for (TrkrHitSet::ConstIterator hitr = range.first; hitr != range.second; ++hitr)
+      {
+        const TrkrDefs::hitkey hitkey = hitr->first;
+        const TrkrHit* hit = hitr->second;
+        if (!hit) continue;
+
+        const unsigned short pad = TpcDefs::getPad(hitkey);
+        const unsigned short tbin = TpcDefs::getTBin(hitkey);
+        const unsigned short rawAdc = hit->getAdc();
+        const double fadc = static_cast<double>(rawAdc) - d->pedestal;
+        if (fadc <= 0.0) continue;
+
+        InModuleThreadData::RawHit rh;
+        rh.layer = d->layer_hitsets[ihs].layer;
+        rh.pad = pad;
+        rh.tbin = tbin;
+        rh.adc = static_cast<unsigned short>(fadc);
+        d->raw_hits.push_back(rh);
+      }
+    }
+  }
+
+  void build_blobs(InModuleThreadData* d)
+  {
+    d->blobs.clear();
+    const unsigned int n = static_cast<unsigned int>(d->raw_hits.size());
+    std::vector<int> used(n, 0);
+
+    for (unsigned int i = 0; i < n; ++i)
+    {
+      if (used[i]) continue;
+
+      used[i] = 1;
+      std::deque<unsigned int> q;
+      q.push_back(i);
+
+      double sw = 0.0;
+      double sp = 0.0;
+      double st = 0.0;
+      unsigned int nh = 0;
+      const unsigned int layer = d->raw_hits[i].layer;
+
+      while (!q.empty())
+      {
+        const unsigned int a = q.front();
+        q.pop_front();
+
+        const InModuleThreadData::RawHit& ha = d->raw_hits[a];
+        const double wa = static_cast<double>(ha.adc);
+        sw += wa;
+        sp += wa * static_cast<double>(ha.pad);
+        st += wa * static_cast<double>(ha.tbin);
+        ++nh;
+
+        for (unsigned int j = 0; j < n; ++j)
+        {
+          if (used[j]) continue;
+          const InModuleThreadData::RawHit& hb = d->raw_hits[j];
+          if (hb.layer != layer) continue;
+
+          const int dp = std::abs(static_cast<int>(hb.pad) - static_cast<int>(ha.pad));
+          const int dt = std::abs(static_cast<int>(hb.tbin) - static_cast<int>(ha.tbin));
+          if (dp <= d->blob_dp && dt <= d->blob_dt)
+          {
+            used[j] = 1;
+            q.push_back(j);
+          }
+        }
+      }
+
+      if (sw <= 0.0) continue;
+
+      InModuleThreadData::Blob bl;
+      bl.layer = layer;
+      bl.pad = sp / sw;
+      bl.tbin = st / sw;
+      bl.adc = sw;
+      bl.nhits = nh;
+      bl.used = 0;
+      d->blobs.push_back(bl);
+    }
+  }
+
+  int find_best_blob_on_layer(const InModuleThreadData* d,
+                              unsigned int target_layer,
+                              double pred_pad,
+                              double pred_tbin)
+  {
+    int best = -1;
+    double best_score = std::numeric_limits<double>::max();
+
+    for (unsigned int i = 0; i < d->blobs.size(); ++i)
+    {
+      const InModuleThreadData::Blob& bl = d->blobs[i];
+      if (bl.used) continue;
+      if (bl.layer != target_layer) continue;
+
+      const double dp = bl.pad - pred_pad;
+      const double dt = bl.tbin - pred_tbin;
+      if (std::fabs(dp) > d->search_dp) continue;
+      if (std::fabs(dt) > d->search_dt) continue;
+
+      const double score = (dp * dp) / (d->search_dp * d->search_dp + 1.0e-9)
+                         + (dt * dt) / (d->search_dt * d->search_dt + 1.0e-9)
+                         - 0.01 * std::log(bl.adc + 1.0);
+      if (score < best_score)
+      {
+        best_score = score;
+        best = static_cast<int>(i);
+      }
+    }
+
+    return best;
+  }
+
+  void grow_one_direction(InModuleThreadData* d,
+                          std::vector<unsigned int>& chain,
+                          int direction)
+  {
+    while (true)
+    {
+      unsigned int edge_layer = d->blobs[chain.back()].layer;
+      if (direction < 0) edge_layer = d->blobs[chain.front()].layer;
+
+      if (direction > 0 && edge_layer >= 54) break;
+      if (direction < 0 && edge_layer <= 7) break;
+
+      const unsigned int target_layer = static_cast<unsigned int>(static_cast<int>(edge_layer) + direction);
+
+      double pred_pad = d->blobs[chain.back()].pad;
+      double pred_tbin = d->blobs[chain.back()].tbin;
+      if (direction < 0)
+      {
+        pred_pad = d->blobs[chain.front()].pad;
+        pred_tbin = d->blobs[chain.front()].tbin;
+      }
+
+      if (chain.size() >= 2)
+      {
+        InModuleThreadData::Track tmp;
+        if (fit_track_from_blobs(d->blobs, chain, d->weight_power, d->adc_weight_floor_frac, tmp))
+        {
+          pred_pad = tmp.pad_slope * static_cast<double>(target_layer) + tmp.pad_intercept;
+          pred_tbin = tmp.tbin_slope * static_cast<double>(target_layer) + tmp.tbin_intercept;
+        }
+      }
+
+      const int ibest = find_best_blob_on_layer(d, target_layer, pred_pad, pred_tbin);
+      if (ibest < 0) break;
+
+      d->blobs[ibest].used = 1;
+      if (direction > 0)
+      {
+        chain.push_back(static_cast<unsigned int>(ibest));
+      }
+      else
+      {
+        chain.insert(chain.begin(), static_cast<unsigned int>(ibest));
+      }
+    }
+  }
+
+  void build_tracks_linear(InModuleThreadData* d)
+  {
+    d->tracks.clear();
+
+    std::vector<unsigned int> order;
+    order.reserve(d->blobs.size());
+    for (unsigned int i = 0; i < d->blobs.size(); ++i) order.push_back(i);
+    std::sort(order.begin(), order.end(), BlobAdcSort(&d->blobs));
+
+    unsigned int tid = 0;
+    for (unsigned int io = 0; io < order.size(); ++io)
+    {
+      const unsigned int seed = order[io];
+      if (d->blobs[seed].used) continue;
+
+      std::vector<unsigned int> chain;
+      chain.push_back(seed);
+      d->blobs[seed].used = 1;
+
+      grow_one_direction(d, chain, +1);
+      grow_one_direction(d, chain, -1);
+
+      if (chain.size() < d->min_track_blobs)
+      {
+        for (unsigned int k = 0; k < chain.size(); ++k)
+        {
+          d->blobs[chain[k]].used = 0;
+        }
+        continue;
+      }
+
+      InModuleThreadData::Track trk;
+      trk.track_id = tid;
+      if (fit_track_from_blobs(d->blobs, chain, d->weight_power, d->adc_weight_floor_frac, trk))
+      {
+        trk.track_id = tid;
+        d->tracks.push_back(trk);
+        ++tid;
+      }
+    }
+  }
+
   void* ProcessModule(void* arg)
   {
     InModuleThreadData* d = static_cast<InModuleThreadData*>(arg);
+    if (!d) return 0;
 
-    if (!d)
+    collect_raw_hits(d);
+    build_blobs(d);
+    build_tracks_linear(d);
+
+    if (d->verbosity > 1)
     {
-      return 0;
-    }
-
-    if (!d->hitset)
-    {
-      return 0;
-    }
-
-    TrkrHitSet::ConstRange range = d->hitset->getHits();
-
-    for (TrkrHitSet::ConstIterator hitr = range.first;
-         hitr != range.second;
-         ++hitr)
-    {
-      const TrkrDefs::hitkey hitkey = hitr->first;
-      const TrkrHit* hit = hitr->second;
-
-      if (!hit)
-      {
-        continue;
-      }
-
-      const unsigned short pad = TpcDefs::getPad(hitkey);
-      const unsigned short tbin = TpcDefs::getTBin(hitkey);
-      const unsigned short rawAdc = hit->getAdc();
-
-      const double fadc = static_cast<double>(rawAdc) - d->pedestal;
-
-      if (fadc <= 0.0)
-      {
-        continue;
-      }
-
-      InModuleThreadData::HitInfo hi;
-
-      hi.region = d->region;
-      hi.sector = d->sector;
-      hi.side = d->side;
-      hi.pad = pad;
-      hi.tbin = tbin;
-      hi.adc = static_cast<unsigned short>(fadc);
-
-      d->hits.push_back(hi);
+      std::cout << "InModuleTracks worker: region=" << d->region
+                << " sector=" << d->sector
+                << " side=" << d->side
+                << " raw_hits=" << d->raw_hits.size()
+                << " blobs=" << d->blobs.size()
+                << " tracks=" << d->tracks.size()
+                << std::endl;
     }
 
     return 0;
   }
 }
 
-// ====================================================================
-// InModuleTracks implementation
-// ====================================================================
+// ===================================================================
+// Constructors
+// ===================================================================
+InModuleThreadData::LayerHitSet::LayerHitSet()
+  : layer(0), hitsetkey(0), hitset(0) {}
 
+InModuleThreadData::RawHit::RawHit()
+  : layer(0), pad(0), tbin(0), adc(0) {}
+
+InModuleThreadData::Blob::Blob()
+  : layer(0), pad(0.0), tbin(0.0), adc(0.0), nhits(0), used(0) {}
+
+InModuleThreadData::Track::Track()
+  : track_id(0), first_layer(0), last_layer(0), nblobs(0),
+    pad_slope(0.0), pad_intercept(0.0), tbin_slope(0.0), tbin_intercept(0.0),
+    chi2_pad(0.0), chi2_tbin(0.0), ndof_pad(0), ndof_tbin(0) {}
+
+InModuleThreadData::InModuleThreadData()
+  : region(0), sector(0), side(0), module_key(0), tGeometry(0),
+    pedestal(74.4), verbosity(0), blob_dt(2), blob_dp(2),
+    search_dt(6), search_dp(6), min_track_blobs(4),
+    weight_power(0.5), adc_weight_floor_frac(0.15) {}
+
+// ===================================================================
+// InModuleTracks
+// ===================================================================
 InModuleTracks::InModuleTracks(const std::string& name,
                                const std::string& filename)
-  : SubsysReco(name)
-  , m_outputFileName(filename)
-  , m_outputFile(0)
-  , m_tree(0)
-  , m_hits(0)
-  , m_tGeometry(0)
-  , m_event(0)
-  , m_maxThreads(72)
-  , m_tree_event(0)
+  : SubsysReco(name),
+    m_outputFileName(filename),
+    m_outputFile(0),
+    m_tree(0),
+    m_hits(0),
+    m_tGeometry(0),
+    m_event(0),
+    m_maxThreads(72),
+    m_pedestal(74.4),
+    m_blob_dt(2),
+    m_blob_dp(2),
+    m_search_dt(6),
+    m_search_dp(6),
+    m_minTrackBlobs(4),
+    m_tree_event(0)
 {
 }
 
@@ -142,49 +459,48 @@ InModuleTracks::~InModuleTracks()
 
 void InModuleTracks::setMaxThreads(unsigned int n)
 {
-  if (n == 0)
-  {
-    m_maxThreads = 1;
-  }
-  else
-  {
-    m_maxThreads = n;
-  }
+  m_maxThreads = (n == 0) ? 1 : n;
 }
 
-int InModuleTracks::Init(PHCompositeNode* /*topNode*/)
+int InModuleTracks::Init(PHCompositeNode*)
 {
   m_outputFile = new TFile(m_outputFileName.c_str(), "RECREATE");
-
   if (!m_outputFile || m_outputFile->IsZombie())
   {
-    std::cerr << Name()
-              << "::Init - cannot create output file "
-              << m_outputFileName
-              << std::endl;
-
+    std::cerr << Name() << "::Init - cannot create " << m_outputFileName << std::endl;
     return Fun4AllReturnCodes::ABORTRUN;
   }
-  else{
-    std::cout << Name()
-              << "!!!!!!!!!!::Init - output file "
-              << m_outputFileName
-              << " created"
-              << std::endl;
-  }
 
-  m_tree = new TTree("InModuleTracks", "TPC in-module hit information");
-
+  m_tree = new TTree("InModuleTracks", "TPC in-module straight-line pattern recognition");
   m_tree->Branch("event", &m_tree_event, "event/I");
 
+  m_tree->Branch("track_id", &m_tree_track_id);
   m_tree->Branch("region", &m_tree_region);
   m_tree->Branch("sector", &m_tree_sector);
   m_tree->Branch("side", &m_tree_side);
+  m_tree->Branch("nblobs", &m_tree_nblobs);
+  m_tree->Branch("first_layer", &m_tree_first_layer);
+  m_tree->Branch("last_layer", &m_tree_last_layer);
 
-  m_tree->Branch("pad", &m_tree_pad);
-  m_tree->Branch("tbin", &m_tree_tbin);
-  m_tree->Branch("adc", &m_tree_adc);
+  m_tree->Branch("pad_slope", &m_tree_pad_slope);
+  m_tree->Branch("pad_intercept", &m_tree_pad_intercept);
+  m_tree->Branch("tbin_slope", &m_tree_tbin_slope);
+  m_tree->Branch("tbin_intercept", &m_tree_tbin_intercept);
+  m_tree->Branch("chi2_pad", &m_tree_chi2_pad);
+  m_tree->Branch("chi2_tbin", &m_tree_chi2_tbin);
+  m_tree->Branch("ndof_pad", &m_tree_ndof_pad);
+  m_tree->Branch("ndof_tbin", &m_tree_ndof_tbin);
 
+  m_tree->Branch("hit_track_id", &m_tree_hit_track_id);
+  m_tree->Branch("hit_region", &m_tree_hit_region);
+  m_tree->Branch("hit_sector", &m_tree_hit_sector);
+  m_tree->Branch("hit_side", &m_tree_hit_side);
+  m_tree->Branch("hit_layer", &m_tree_hit_layer);
+  m_tree->Branch("hit_pad", &m_tree_hit_pad);
+  m_tree->Branch("hit_tbin", &m_tree_hit_tbin);
+  m_tree->Branch("hit_adc", &m_tree_hit_adc);
+
+  std::cout << Name() << "::Init - output file " << m_outputFileName << " created" << std::endl;
   return Fun4AllReturnCodes::EVENT_OK;
 }
 
@@ -194,52 +510,36 @@ int InModuleTracks::InitRun(PHCompositeNode* topNode)
   {
     return Fun4AllReturnCodes::ABORTRUN;
   }
-
   m_event = 0;
-
   return Fun4AllReturnCodes::EVENT_OK;
 }
 
-int InModuleTracks::End(PHCompositeNode* /*topNode*/)
+int InModuleTracks::End(PHCompositeNode*)
 {
   if (m_outputFile)
   {
     m_outputFile->cd();
-
-    if (m_tree)
-    {
-      m_tree->Write();
-    }
-
+    if (m_tree) m_tree->Write();
     m_outputFile->Close();
     delete m_outputFile;
     m_outputFile = 0;
   }
-
   return Fun4AllReturnCodes::EVENT_OK;
 }
 
 int InModuleTracks::getNodes(PHCompositeNode* topNode)
 {
   m_hits = findNode::getClass<TrkrHitSetContainer>(topNode, "TRKR_HITSET");
-
   if (!m_hits)
   {
-    std::cerr << Name()
-              << "::getNodes - missing TRKR_HITSET"
-              << std::endl;
-
+    std::cerr << Name() << "::getNodes - missing TRKR_HITSET" << std::endl;
     return Fun4AllReturnCodes::ABORTRUN;
   }
 
   m_tGeometry = findNode::getClass<ActsGeometry>(topNode, "ActsGeometry");
-
   if (!m_tGeometry)
   {
-    std::cerr << Name()
-              << "::getNodes - missing ActsGeometry"
-              << std::endl;
-
+    std::cerr << Name() << "::getNodes - missing ActsGeometry" << std::endl;
     return Fun4AllReturnCodes::ABORTRUN;
   }
 
@@ -250,168 +550,111 @@ void InModuleTracks::reset_tree_vars()
 {
   m_tree_event = m_event;
 
+  m_tree_track_id.clear();
   m_tree_region.clear();
   m_tree_sector.clear();
   m_tree_side.clear();
+  m_tree_nblobs.clear();
+  m_tree_first_layer.clear();
+  m_tree_last_layer.clear();
 
-  m_tree_pad.clear();
-  m_tree_tbin.clear();
-  m_tree_adc.clear();
+  m_tree_pad_slope.clear();
+  m_tree_pad_intercept.clear();
+  m_tree_tbin_slope.clear();
+  m_tree_tbin_intercept.clear();
+  m_tree_chi2_pad.clear();
+  m_tree_chi2_tbin.clear();
+  m_tree_ndof_pad.clear();
+  m_tree_ndof_tbin.clear();
+
+  m_tree_hit_track_id.clear();
+  m_tree_hit_region.clear();
+  m_tree_hit_sector.clear();
+  m_tree_hit_side.clear();
+  m_tree_hit_layer.clear();
+  m_tree_hit_pad.clear();
+  m_tree_hit_tbin.clear();
+  m_tree_hit_adc.clear();
 }
 
-// ====================================================================
-// process_event
-// ====================================================================
-
-int InModuleTracks::process_event(PHCompositeNode* /*topNode*/)
+int InModuleTracks::process_event(PHCompositeNode*)
 {
-  std::cout<< Name()
-           << "!!!!!!!!!!!::process_event - processing event " << m_event
-           << std::endl;
   reset_tree_vars();
 
   std::vector<InModuleThreadData> tdata;
   tdata.reserve(72);
 
-  // ------------------------------------------------------------
-  // Build one work package per module key:
-  //
-  //   3 regions/modules x 12 sectors x 2 sides = 72 jobs
-  //
-  // The key is generated exactly as:
-  //
-  //   TpcDefs::genModuleHitSetKey(region, sector, side)
-  //
-  // ------------------------------------------------------------
-
+  // One work package per module, not per layer.
   for (unsigned int side = 0; side < 2; ++side)
   {
     for (unsigned int sector = 0; sector < 12; ++sector)
     {
       for (unsigned int region = 0; region < 3; ++region)
       {
+        InModuleThreadData td;
+        td.region = region;
+        td.sector = sector;
+        td.side = static_cast<int>(side);
+        td.module_key = TpcDefs::genModuleHitSetKey(static_cast<uint8_t>(region),
+                                                    static_cast<uint8_t>(sector),
+                                                    static_cast<uint8_t>(side));
+        td.tGeometry = m_tGeometry;
+        td.pedestal = m_pedestal;
+        td.verbosity = Verbosity();
+        td.blob_dt = m_blob_dt;
+        td.blob_dp = m_blob_dp;
+        td.search_dt = m_search_dt;
+        td.search_dp = m_search_dp;
+        td.min_track_blobs = m_minTrackBlobs;
+
         for (unsigned int l = 0; l < 16; ++l)
         {
+          const unsigned int layer = region * 16 + l + 7;
+          const TrkrDefs::hitsetkey hitset_key = TpcDefs::genHitSetKey(layer, sector, side);
+          TrkrHitSet* hitset = m_hits->findHitSet(hitset_key);
+          if (!hitset) continue;
 
-            int layer = region * 16 + l + 7;
-            const TrkrDefs::hitsetkey hitset_key = TpcDefs::genHitSetKey(layer, sector, side);
-            const TrkrDefs::hitsetkey key =
-              TpcDefs::genModuleHitSetKey(static_cast<uint8_t>(region),
-                                          static_cast<uint8_t>(sector),
-                                          static_cast<uint8_t>(side));
+          InModuleThreadData::LayerHitSet lhs;
+          lhs.layer = layer;
+          lhs.hitsetkey = hitset_key;
+          lhs.hitset = hitset;
+          td.layer_hitsets.push_back(lhs);
+        }
 
-            TrkrHitSet* hitset = m_hits->findHitSet(hitset_key);
-
-            if (!hitset)
-            {
-              if (Verbosity() > 2)
-              {
-                std::cout << Name()
-                          << "::process_event - no hitset for"
-                          << " layer=" << layer
-                          << " region=" << region
-                          << " sector=" << sector
-                          << " side=" << side
-                          << " key=" << hitset_key
-                          << " (module key " << key << ")"
-                          << std::endl;
-              }
-
-              continue;
-            }
-
-            InModuleThreadData td;
-
-            td.layer = layer;
-            td.region = region;
-            td.sector = sector;
-            td.side = static_cast<int>(side);
-            td.hitsetkey = hitset_key;
-            td.module_key = key;
-
-            td.hitset = hitset;
-            td.tGeometry = m_tGeometry;
-
-            // Same default pedestal value used in many TPC raw-hit contexts.
-            // Replace by your calibrated pedestal if available.
-            td.pedestal = 74.4;
-
-            td.verbosity = Verbosity();
-
-            tdata.push_back(td);
+        if (!td.layer_hitsets.empty())
+        {
+          tdata.push_back(td);
         }
       }
     }
   }
 
- // if (Verbosity() > 0)
-  //{
-    std::cout << Name()
-              << "::process_event - event " << m_event
-              << " has " << tdata.size()
-              << " non-empty  hitsets"
-              << std::endl;
-  //}
+  std::cout << Name() << "::process_event - event " << m_event
+            << " has " << tdata.size() << " non-empty modules" << std::endl;
 
-  if (tdata.empty())
+  const unsigned int maxLive = std::max(1u, std::min(m_maxThreads,
+                         static_cast<unsigned int>(tdata.size())));
+
+  for (unsigned int start = 0; start < static_cast<unsigned int>(tdata.size()); start += maxLive)
   {
-    if (m_tree)
-    {
-      m_tree->Fill();
-    }
-
-    ++m_event;
-    return Fun4AllReturnCodes::EVENT_OK;
-  }
-
-  // ------------------------------------------------------------
-  // Launch pthreads in batches.
-  //
-  // This is important:
-  // if m_maxThreads < tdata.size(), we must not process only the
-  // first m_maxThreads modules and silently skip the rest.
-  // ------------------------------------------------------------
-
-  const unsigned int maxLive =
-    std::max(1u, std::min(m_maxThreads,
-                          static_cast<unsigned int>(tdata.size())));
-
-  for (unsigned int start = 0;
-       start < static_cast<unsigned int>(tdata.size());
-       start += maxLive)
-  {
-    const unsigned int end =
-      std::min(start + maxLive,
-               static_cast<unsigned int>(tdata.size()));
-
+    const unsigned int end = std::min(start + maxLive,
+                                      static_cast<unsigned int>(tdata.size()));
     const unsigned int nLive = end - start;
 
-    std::vector<pthread_t> threads;
-    threads.resize(nLive);
-
-    std::vector<int> thread_ok;
-    thread_ok.resize(nLive, 0);
+    std::vector<pthread_t> threads(nLive);
+    std::vector<int> thread_ok(nLive, 0);
 
     for (unsigned int i = 0; i < nLive; ++i)
     {
       const unsigned int idx = start + i;
-
-      const int rc =
-        pthread_create(&threads[i],
-                       0,
-                       ProcessModule,
-                       static_cast<void*>(&tdata[idx]));
-
+      const int rc = pthread_create(&threads[i], 0, ProcessModule,
+                                    static_cast<void*>(&tdata[idx]));
       if (rc != 0)
       {
-        std::cerr << Name()
-                  << "::process_event - pthread_create failed for"
+        std::cerr << Name() << "::process_event - pthread_create failed for"
                   << " region=" << tdata[idx].region
                   << " sector=" << tdata[idx].sector
-                  << " side=" << tdata[idx].side
-                  << std::endl;
-
-        thread_ok[i] = 0;
+                  << " side=" << tdata[idx].side << std::endl;
       }
       else
       {
@@ -421,56 +664,59 @@ int InModuleTracks::process_event(PHCompositeNode* /*topNode*/)
 
     for (unsigned int i = 0; i < nLive; ++i)
     {
-      if (thread_ok[i])
-      {
-        pthread_join(threads[i], 0);
-      }
+      if (thread_ok[i]) pthread_join(threads[i], 0);
     }
   }
 
-  // ------------------------------------------------------------
-  // Serial merge.
-  //
-  // ROOT output is filled only here, after all pthreads are joined.
-  // This avoids thread-unsafe ROOT writes.
-  // ------------------------------------------------------------
-
-  for (std::vector<InModuleThreadData>::const_iterator td = tdata.begin();
-       td != tdata.end();
-       ++td)
+  for (unsigned int im = 0; im < tdata.size(); ++im)
   {
-    for (std::vector<InModuleThreadData::HitInfo>::const_iterator hi = td->hits.begin();
-         hi != td->hits.end();
-         ++hi)
+    const InModuleThreadData& td = tdata[im];
+    for (unsigned int it = 0; it < td.tracks.size(); ++it)
     {
-      m_tree_region.push_back(hi->region);
-      m_tree_sector.push_back(hi->sector);
-      m_tree_side.push_back(hi->side);
+      const InModuleThreadData::Track& tr = td.tracks[it];
+      const unsigned int global_track_id = static_cast<unsigned int>(m_tree_track_id.size());
 
-      m_tree_pad.push_back(hi->pad);
-      m_tree_tbin.push_back(hi->tbin);
-      m_tree_adc.push_back(hi->adc);
+      m_tree_track_id.push_back(global_track_id);
+      m_tree_region.push_back(td.region);
+      m_tree_sector.push_back(td.sector);
+      m_tree_side.push_back(td.side);
+      m_tree_nblobs.push_back(tr.nblobs);
+      m_tree_first_layer.push_back(tr.first_layer);
+      m_tree_last_layer.push_back(tr.last_layer);
 
-      if (Verbosity() > 2)
+      m_tree_pad_slope.push_back(tr.pad_slope);
+      m_tree_pad_intercept.push_back(tr.pad_intercept);
+      m_tree_tbin_slope.push_back(tr.tbin_slope);
+      m_tree_tbin_intercept.push_back(tr.tbin_intercept);
+      m_tree_chi2_pad.push_back(tr.chi2_pad);
+      m_tree_chi2_tbin.push_back(tr.chi2_tbin);
+      m_tree_ndof_pad.push_back(tr.ndof_pad);
+      m_tree_ndof_tbin.push_back(tr.ndof_tbin);
+
+      for (unsigned int ib = 0; ib < tr.blob_indices.size(); ++ib)
       {
-        std::cout << "  event=" << m_event
-                  << " region=" << hi->region
-                  << " sector=" << hi->sector
-                  << " side=" << hi->side
-                  << " pad=" << hi->pad
-                  << " tbin=" << hi->tbin
-                  << " adc=" << hi->adc
-                  << std::endl;
+        const InModuleThreadData::Blob& bl = td.blobs[tr.blob_indices[ib]];
+        m_tree_hit_track_id.push_back(global_track_id);
+        m_tree_hit_region.push_back(td.region);
+        m_tree_hit_sector.push_back(td.sector);
+        m_tree_hit_side.push_back(td.side);
+        m_tree_hit_layer.push_back(bl.layer);
+        m_tree_hit_pad.push_back(bl.pad);
+        m_tree_hit_tbin.push_back(bl.tbin);
+        m_tree_hit_adc.push_back(bl.adc);
       }
     }
   }
 
-  if (m_tree)
+  if (m_tree) m_tree->Fill();
+
+  if (Verbosity() > 0)
   {
-    m_tree->Fill();
+    std::cout << Name() << "::process_event - event " << m_event
+              << " tracks=" << m_tree_track_id.size()
+              << " track-blobs=" << m_tree_hit_track_id.size() << std::endl;
   }
 
   ++m_event;
-
   return Fun4AllReturnCodes::EVENT_OK;
 }
