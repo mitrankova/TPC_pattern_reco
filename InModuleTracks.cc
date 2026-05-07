@@ -296,6 +296,174 @@ namespace
     return true;
   }
 
+
+
+  // -------------------------------------------------------------------
+  // Connect disconnected track pieces inside the same TPC module.
+  //
+  // The first pattern-recognition pass builds short chains and stops when
+  // a dead region or empty layer breaks the chain.  This second pass treats
+  // those short tracks as pieces of a possible longer track.  Two pieces are
+  // merged if their extrapolated pad/tbin positions agree in the empty gap
+  // and their slopes are compatible.  After every accepted merge the final
+  // track is refit using the raw ADC cells, not blob centers.
+  // -------------------------------------------------------------------
+  static const unsigned int CONNECT_MAX_LAYER_GAP = 8;  // missing layers allowed between pieces
+  static const double CONNECT_DP = 8.0;                 // pad window at gap midpoint
+  static const double CONNECT_DT = 8.0;                 // tbin window at gap midpoint
+  static const double CONNECT_DPAD_SLOPE = 2.0;         // pad/layer slope compatibility
+  static const double CONNECT_DTBIN_SLOPE = 2.0;        // tbin/layer slope compatibility
+
+  struct TrackStartSort
+  {
+    const std::vector<InModuleThreadData::Track>* tracks;
+    TrackStartSort(const std::vector<InModuleThreadData::Track>* t) : tracks(t) {}
+    bool operator()(unsigned int a, unsigned int b) const
+    {
+      const InModuleThreadData::Track& ta = (*tracks)[a];
+      const InModuleThreadData::Track& tb = (*tracks)[b];
+      if (ta.first_layer != tb.first_layer) return ta.first_layer < tb.first_layer;
+      if (ta.last_layer  != tb.last_layer)  return ta.last_layer  < tb.last_layer;
+      return ta.nrawhits > tb.nrawhits;
+    }
+  };
+
+  void append_unique_blob_indices(std::vector<unsigned int>& dst,
+                                  const std::vector<unsigned int>& src)
+  {
+    for (unsigned int i = 0; i < src.size(); ++i)
+    {
+      if (std::find(dst.begin(), dst.end(), src[i]) == dst.end())
+      {
+        dst.push_back(src[i]);
+      }
+    }
+  }
+
+  bool tracks_can_connect(const InModuleThreadData::Track& a,
+                          const InModuleThreadData::Track& b,
+                          double& score)
+  {
+    score = std::numeric_limits<double>::max();
+
+    // Require separated pieces in layer.  This avoids merging two different
+    // candidates that overlap in the same rows.
+    if (a.last_layer >= b.first_layer) return false;
+
+    const unsigned int gap = b.first_layer - a.last_layer - 1;
+    if (gap > CONNECT_MAX_LAYER_GAP) return false;
+
+    // Compare the two extrapolations in the middle of the missing region.
+    const double lmatch = 0.5 * (static_cast<double>(a.last_layer) +
+                                 static_cast<double>(b.first_layer));
+
+    const double pad_a  = a.pad_slope  * lmatch + a.pad_intercept;
+    const double pad_b  = b.pad_slope  * lmatch + b.pad_intercept;
+    const double tbin_a = a.tbin_slope * lmatch + a.tbin_intercept;
+    const double tbin_b = b.tbin_slope * lmatch + b.tbin_intercept;
+
+    const double dp = std::fabs(pad_a - pad_b);
+    const double dt = std::fabs(tbin_a - tbin_b);
+    const double dmp = std::fabs(a.pad_slope  - b.pad_slope);
+    const double dmt = std::fabs(a.tbin_slope - b.tbin_slope);
+
+    if (dp  > CONNECT_DP) return false;
+    if (dt  > CONNECT_DT) return false;
+    if (dmp > CONNECT_DPAD_SLOPE) return false;
+    if (dmt > CONNECT_DTBIN_SLOPE) return false;
+
+    score = (dp  / CONNECT_DP) * (dp  / CONNECT_DP)
+          + (dt  / CONNECT_DT) * (dt  / CONNECT_DT)
+          + (dmp / CONNECT_DPAD_SLOPE) * (dmp / CONNECT_DPAD_SLOPE)
+          + (dmt / CONNECT_DTBIN_SLOPE) * (dmt / CONNECT_DTBIN_SLOPE)
+          + 0.05 * static_cast<double>(gap);
+
+    return true;
+  }
+
+  void connect_track_pieces_in_module(InModuleThreadData* d)
+  {
+    if (!d) return;
+    if (d->tracks.size() < 2) return;
+
+    std::vector<InModuleThreadData::Track> pieces = d->tracks;
+    std::vector<InModuleThreadData::Track> output;
+    std::vector<int> used(pieces.size(), 0);
+
+    std::vector<unsigned int> order;
+    order.reserve(pieces.size());
+    for (unsigned int i = 0; i < pieces.size(); ++i) order.push_back(i);
+    std::sort(order.begin(), order.end(), TrackStartSort(&pieces));
+
+    for (unsigned int io = 0; io < order.size(); ++io)
+    {
+      const unsigned int iseed = order[io];
+      if (used[iseed]) continue;
+
+      InModuleThreadData::Track current = pieces[iseed];
+      used[iseed] = 1;
+
+      bool merged_any = true;
+      while (merged_any)
+      {
+        merged_any = false;
+        int best_j = -1;
+        double best_score = std::numeric_limits<double>::max();
+
+        for (unsigned int jo = 0; jo < order.size(); ++jo)
+        {
+          const unsigned int j = order[jo];
+          if (used[j]) continue;
+
+          double score = 0.0;
+          if (!tracks_can_connect(current, pieces[j], score)) continue;
+
+          if (score < best_score)
+          {
+            best_score = score;
+            best_j = static_cast<int>(j);
+          }
+        }
+
+        if (best_j >= 0)
+        {
+          append_unique_blob_indices(current.blob_indices, pieces[best_j].blob_indices);
+
+          InModuleThreadData::Track refit;
+          if (robust_fit_track_from_raw_hits(d->raw_hits, d->blobs,
+                                             current.blob_indices,
+                                             d->weight_power,
+                                             d->adc_weight_floor_frac,
+                                             refit))
+          {
+            current = refit;
+            used[best_j] = 1;
+            merged_any = true;
+          }
+        }
+      }
+
+      output.push_back(current);
+    }
+
+    for (unsigned int i = 0; i < output.size(); ++i)
+    {
+      output[i].track_id = i;
+    }
+
+    if (d->verbosity > 1)
+    {
+      std::cout << "InModuleTracks connect pieces: region=" << d->region
+                << " sector=" << d->sector
+                << " side=" << d->side
+                << " pieces=" << pieces.size()
+                << " connected_tracks=" << output.size()
+                << std::endl;
+    }
+
+    d->tracks.swap(output);
+  }
+
   static const int N_MODULES = 3;
   static const int N_ROWS = 16;
 
@@ -587,6 +755,7 @@ namespace
     collect_raw_hits(d);
     build_blobs(d);
     build_tracks_linear(d);
+    connect_track_pieces_in_module(d);
 
     if (d->verbosity > 1)
     {
