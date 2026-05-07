@@ -3,17 +3,27 @@
 #include <fun4all/Fun4AllReturnCodes.h>
 
 #include <phool/PHCompositeNode.h>
+#include <phool/PHIODataNode.h>
+#include <phool/PHNodeIterator.h>
+#include <phool/PHObject.h>
 #include <phool/getClass.h>
 
-#include <trackbase/ActsGeometry.h>
+#include <TFile.h>
+#include <TTree.h>
+
+#include "InModuleTrack.h"
+#include "InModuleTrackHit.h"
+#include "InModuleTrackContainer.h"
+
+
 #include <trackbase/TrkrDefs.h>
 #include <trackbase/TpcDefs.h>
 #include <trackbase/TrkrHit.h>
 #include <trackbase/TrkrHitSet.h>
 #include <trackbase/TrkrHitSetContainer.h>
+#include <trackbase/ActsGeometry.h>
 
-#include <TFile.h>
-#include <TTree.h>
+
 
 #include <pthread.h>
 
@@ -801,11 +811,12 @@ InModuleThreadData::InModuleThreadData()
 InModuleTracks::InModuleTracks(const std::string& name,
                                const std::string& filename)
   : SubsysReco(name),
-    m_outputFileName(filename),
+     m_outputFileName(filename),
     m_outputFile(0),
     m_tree(0),
     m_hits(0),
     m_tGeometry(0),
+    m_inModuleTrackContainer(0),
     m_event(0),
     m_maxThreads(72),
     m_pedestal(74.4),
@@ -814,6 +825,11 @@ InModuleTracks::InModuleTracks(const std::string& name,
     m_search_dt(6),
     m_search_dp(6),
     m_minTrackBlobs(4),
+    m_connectMaxLayerGap(8),
+    m_connect_dp(8.0),
+    m_connect_dt(8.0),
+    m_connect_dpad_slope(2.0),
+    m_connect_dtbin_slope(2.0),
     m_tree_event(0)
 {
 }
@@ -887,6 +903,12 @@ int InModuleTracks::InitRun(PHCompositeNode* topNode)
   {
     return Fun4AllReturnCodes::ABORTRUN;
   }
+
+  if (createNodes(topNode) != Fun4AllReturnCodes::EVENT_OK)
+  {
+    return Fun4AllReturnCodes::ABORTRUN;
+  }
+
   m_event = 0;
   return Fun4AllReturnCodes::EVENT_OK;
 }
@@ -918,6 +940,41 @@ int InModuleTracks::getNodes(PHCompositeNode* topNode)
   {
     std::cerr << Name() << "::getNodes - missing ActsGeometry" << std::endl;
     return Fun4AllReturnCodes::ABORTRUN;
+  }
+
+  return Fun4AllReturnCodes::EVENT_OK;
+}
+
+int InModuleTracks::createNodes(PHCompositeNode* topNode)
+{
+  PHNodeIterator iter(topNode);
+
+  PHCompositeNode* dstNode =
+    dynamic_cast<PHCompositeNode*>(iter.findFirst("PHCompositeNode", "DST"));
+
+  if (!dstNode)
+  {
+    dstNode = new PHCompositeNode("DST");
+    topNode->addNode(dstNode);
+  }
+
+  m_inModuleTrackContainer =
+    findNode::getClass<InModuleTrackContainer>(topNode, "INMODULETRACKS");
+
+  if (!m_inModuleTrackContainer)
+  {
+    m_inModuleTrackContainer = new InModuleTrackContainer();
+
+    PHIODataNode<PHObject>* node =
+      new PHIODataNode<PHObject>(m_inModuleTrackContainer,
+                                 "INMODULETRACKS",
+                                 "PHObject");
+
+    dstNode->addNode(node);
+
+    std::cout << Name()
+              << "::createNodes - created INMODULETRACKS node"
+              << std::endl;
   }
 
   return Fun4AllReturnCodes::EVENT_OK;
@@ -962,6 +1019,11 @@ m_tree_hit_local_radius.clear();
 int InModuleTracks::process_event(PHCompositeNode*)
 {
   reset_tree_vars();
+
+  if (m_inModuleTrackContainer)
+{
+  m_inModuleTrackContainer->Reset();
+}
 
   std::vector<InModuleThreadData> tdata;
   tdata.reserve(72);
@@ -1050,51 +1112,114 @@ int InModuleTracks::process_event(PHCompositeNode*)
     }
   }
 
-  for (unsigned int im = 0; im < tdata.size(); ++im)
+for (unsigned int im = 0; im < tdata.size(); ++im)
+{
+  const InModuleThreadData& td = tdata[im];
+
+  for (unsigned int it = 0; it < td.tracks.size(); ++it)
   {
-    const InModuleThreadData& td = tdata[im];
-    for (unsigned int it = 0; it < td.tracks.size(); ++it)
+    const InModuleThreadData::Track& tr = td.tracks[it];
+
+    const unsigned int global_track_id =
+      m_inModuleTrackContainer ?
+      m_inModuleTrackContainer->size() :
+      static_cast<unsigned int>(m_tree_track_id.size());
+
+    InModuleTrack outTrack;
+
+    outTrack.set_event(static_cast<unsigned int>(m_event));
+    outTrack.set_track_id(global_track_id);
+
+    outTrack.set_region(td.region);
+    outTrack.set_sector(td.sector);
+    outTrack.set_side(td.side);
+
+    outTrack.set_nblobs(tr.nblobs);
+    outTrack.set_nrawhits(tr.nrawhits);
+
+    outTrack.set_first_layer(tr.first_layer);
+    outTrack.set_last_layer(tr.last_layer);
+
+    outTrack.set_pad_slope(tr.pad_slope);
+    outTrack.set_pad_intercept(tr.pad_intercept);
+
+    outTrack.set_tbin_slope(tr.tbin_slope);
+    outTrack.set_tbin_intercept(tr.tbin_intercept);
+
+    outTrack.set_chi2_pad(tr.chi2_pad);
+    outTrack.set_chi2_tbin(tr.chi2_tbin);
+
+    outTrack.set_ndof_pad(tr.ndof_pad);
+    outTrack.set_ndof_tbin(tr.ndof_tbin);
+
+    // Existing TTree track-level fill
+    m_tree_track_id.push_back(global_track_id);
+    m_tree_region.push_back(td.region);
+    m_tree_sector.push_back(td.sector);
+    m_tree_side.push_back(td.side);
+    m_tree_nblobs.push_back(tr.nblobs);
+    m_tree_nrawhits.push_back(tr.nrawhits);
+    m_tree_first_layer.push_back(tr.first_layer);
+    m_tree_last_layer.push_back(tr.last_layer);
+
+    m_tree_pad_slope.push_back(tr.pad_slope);
+    m_tree_pad_intercept.push_back(tr.pad_intercept);
+    m_tree_tbin_slope.push_back(tr.tbin_slope);
+    m_tree_tbin_intercept.push_back(tr.tbin_intercept);
+    m_tree_chi2_pad.push_back(tr.chi2_pad);
+    m_tree_chi2_tbin.push_back(tr.chi2_tbin);
+    m_tree_ndof_pad.push_back(tr.ndof_pad);
+    m_tree_ndof_tbin.push_back(tr.ndof_tbin);
+
+    for (unsigned int ih = 0; ih < tr.raw_hit_indices.size(); ++ih)
     {
-      const InModuleThreadData::Track& tr = td.tracks[it];
-      const unsigned int global_track_id = static_cast<unsigned int>(m_tree_track_id.size());
+      const InModuleThreadData::RawHit& rh =
+        td.raw_hits[tr.raw_hit_indices[ih]];
 
-      m_tree_track_id.push_back(global_track_id);
-      m_tree_region.push_back(td.region);
-      m_tree_sector.push_back(td.sector);
-      m_tree_side.push_back(td.side);
-      m_tree_nblobs.push_back(tr.nblobs);
-      m_tree_nrawhits.push_back(tr.nrawhits);
-      m_tree_first_layer.push_back(tr.first_layer);
-      m_tree_last_layer.push_back(tr.last_layer);
+      InModuleTrackHit outHit;
 
-      m_tree_pad_slope.push_back(tr.pad_slope);
-      m_tree_pad_intercept.push_back(tr.pad_intercept);
-      m_tree_tbin_slope.push_back(tr.tbin_slope);
-      m_tree_tbin_intercept.push_back(tr.tbin_intercept);
-      m_tree_chi2_pad.push_back(tr.chi2_pad);
-      m_tree_chi2_tbin.push_back(tr.chi2_tbin);
-      m_tree_ndof_pad.push_back(tr.ndof_pad);
-      m_tree_ndof_tbin.push_back(tr.ndof_tbin);
+      outHit.set_event(static_cast<unsigned int>(m_event));
+      outHit.set_track_id(global_track_id);
 
-      for (unsigned int ih = 0; ih < tr.raw_hit_indices.size(); ++ih)
-      {
-        const InModuleThreadData::RawHit& rh = td.raw_hits[tr.raw_hit_indices[ih]];
-        m_tree_hit_event.push_back(m_event);
-        m_tree_hit_track_id.push_back(global_track_id);
-        m_tree_hit_region.push_back(td.region);
-        m_tree_hit_sector.push_back(td.sector);
-        m_tree_hit_side.push_back(td.side);
-        m_tree_hit_layer.push_back(rh.layer);
-        m_tree_hit_hitsetkey.push_back(static_cast<unsigned long long>(rh.hitsetkey));
-        m_tree_hit_hitkey.push_back(static_cast<unsigned long long>(rh.hitkey));
-        m_tree_hit_pad.push_back(static_cast<double>(rh.pad));
-        m_tree_hit_tbin.push_back(static_cast<double>(rh.tbin));
-        m_tree_hit_adc.push_back(static_cast<double>(rh.adc));
-        m_tree_hit_local_phi.push_back(rh.local_phi);
-        m_tree_hit_local_radius.push_back(rh.local_radius);
-      }
+      outHit.set_region(td.region);
+      outHit.set_sector(td.sector);
+      outHit.set_side(td.side);
+
+      outHit.set_layer(rh.layer);
+      outHit.set_hitsetkey(rh.hitsetkey);
+      outHit.set_hitkey(rh.hitkey);
+
+      outHit.set_pad(static_cast<double>(rh.pad));
+      outHit.set_tbin(static_cast<double>(rh.tbin));
+      outHit.set_adc(static_cast<double>(rh.adc));
+
+      outHit.set_local_phi(rh.local_phi);
+      outHit.set_local_radius(rh.local_radius);
+
+      outTrack.add_hit(outHit);
+
+      // Existing TTree hit-level fill
+      m_tree_hit_event.push_back(m_event);
+      m_tree_hit_track_id.push_back(global_track_id);
+      m_tree_hit_region.push_back(td.region);
+      m_tree_hit_sector.push_back(td.sector);
+      m_tree_hit_side.push_back(td.side);
+      m_tree_hit_layer.push_back(rh.layer);
+      m_tree_hit_hitsetkey.push_back(static_cast<unsigned long long>(rh.hitsetkey));
+      m_tree_hit_hitkey.push_back(static_cast<unsigned long long>(rh.hitkey));
+      m_tree_hit_pad.push_back(static_cast<double>(rh.pad));
+      m_tree_hit_tbin.push_back(static_cast<double>(rh.tbin));
+      m_tree_hit_adc.push_back(static_cast<double>(rh.adc));
+      m_tree_hit_local_phi.push_back(rh.local_phi);
+      m_tree_hit_local_radius.push_back(rh.local_radius);
+    }
+
+    if (m_inModuleTrackContainer)
+    {
+      m_inModuleTrackContainer->add_track(outTrack);
     }
   }
+}
 
   if (m_tree) m_tree->Fill();
 
@@ -1104,7 +1229,18 @@ int InModuleTracks::process_event(PHCompositeNode*)
               << " tracks=" << m_tree_track_id.size()
               << " track-raw-hits=" << m_tree_hit_track_id.size() << std::endl;
   }
-
+  if (m_inModuleTrackContainer && Verbosity() > 0)
+{
+  m_inModuleTrackContainer->identify();
+}
+if (m_inModuleTrackContainer && Verbosity() > 1)
+{
+  for (unsigned int i = 0; i < m_inModuleTrackContainer->size(); ++i)
+  {
+    const InModuleTrack* trk = m_inModuleTrackContainer->get_track(i);
+    if (trk) trk->identify();
+  }
+}
   ++m_event;
   return Fun4AllReturnCodes::EVENT_OK;
 }

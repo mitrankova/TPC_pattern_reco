@@ -7,11 +7,16 @@
 #include <vector>
 
 class PHCompositeNode;
+
+class TFile;
+class TTree;
+
+class InModuleTrackContainer;
+
 class TrkrHitSetContainer;
 class TrkrHitSet;
 class ActsGeometry;
-class TFile;
-class TTree;
+
 
 // ===================================================================
 // Per-module thread data
@@ -205,6 +210,7 @@ class InModuleTracks : public SubsysReco
  private:
   int getNodes(PHCompositeNode*);
   void reset_tree_vars();
+  int createNodes(PHCompositeNode*);
 
   std::string m_outputFileName;
 
@@ -214,6 +220,7 @@ class InModuleTracks : public SubsysReco
   TrkrHitSetContainer* m_hits;
   ActsGeometry* m_tGeometry;
 
+  InModuleTrackContainer* m_inModuleTrackContainer;
   int m_event;
   unsigned int m_maxThreads;
 

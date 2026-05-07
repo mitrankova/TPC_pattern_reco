@@ -11,13 +11,20 @@ AM_LDFLAGS = \
   -L$(OFFLINE_MAIN)/lib64
 
 pkginclude_HEADERS = \
-  InModuleTracks.h 
+  InModuleTracks.h \
+  InModuleTrack.h \
+  InModuleTrackHit.h \
+  InModuleTrackContainer.h
 
 lib_LTLIBRARIES = \
   libInModuleTracks.la
 
 libInModuleTracks_la_SOURCES = \
-  InModuleTracks.cc 
+  InModuleTracks.cc \
+  InModuleTrack.cc \
+  InModuleTrackHit.cc \
+  InModuleTrackContainer.cc \
+  InModuleTrackDict.cc
 
 libInModuleTracks_la_LIBADD = \
   -lphool \
@@ -38,13 +45,18 @@ libInModuleTracks_la_LIBADD = \
   -ltrackeralign \
   -ltrackbase_historic_io
 
-BUILT_SOURCES = testexternals.cc
+BUILT_SOURCES = \
+  testexternals.cc \
+  InModuleTrackDict.cc
 
 noinst_PROGRAMS = \
   testexternals
 
 testexternals_SOURCES = testexternals.cc
 testexternals_LDADD   = libInModuleTracks.la
+
+InModuleTrackDict.cc: InModuleTrack.h InModuleTrackHit.h InModuleTrackContainer.h LinkDef.h
+	rootcling -f $@ -c $(AM_CPPFLAGS) $^
 
 testexternals.cc:
 	echo "//*** this is a generated file. Do not commit, do not edit" > $@
@@ -55,3 +67,4 @@ testexternals.cc:
 
 clean-local:
 	rm -f $(BUILT_SOURCES)
+	rm -f InModuleTrackDict_rdict.pcm
