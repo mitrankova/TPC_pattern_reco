@@ -13,12 +13,7 @@ class ActsGeometry;
 class TFile;
 class TTree;
 
-// ===================================================================
-// Per-module pthread input/output package
-// One object = one TPC module: region 0..2, sector 0..11, side 0..1.
-// The object owns all output from that pthread. ROOT is filled only
-// after pthread_join in the main thread.
-// ===================================================================
+
 struct InModuleThreadData
 {
   InModuleThreadData();
@@ -35,9 +30,13 @@ struct InModuleThreadData
   {
     RawHit();
     unsigned int layer;
+    TrkrDefs::hitsetkey hitsetkey;
+    TrkrDefs::hitkey hitkey;
     unsigned short pad;
     unsigned short tbin;
     unsigned short adc;
+    double local_phi;
+    double local_radius;
   };
 
   struct Blob
@@ -49,6 +48,7 @@ struct InModuleThreadData
     double adc;
     unsigned int nhits;
     int used;
+    std::vector<unsigned int> raw_hit_indices;
   };
 
   struct Track
@@ -58,6 +58,7 @@ struct InModuleThreadData
     unsigned int first_layer;
     unsigned int last_layer;
     unsigned int nblobs;
+    unsigned int nrawhits;
 
     double pad_slope;
     double pad_intercept;
@@ -69,6 +70,8 @@ struct InModuleThreadData
     int ndof_tbin;
 
     std::vector<unsigned int> blob_indices;
+
+    std::vector<unsigned int> raw_hit_indices;
   };
 
   unsigned int region;
@@ -80,7 +83,6 @@ struct InModuleThreadData
   double pedestal;
   int verbosity;
 
-  // Tunable parameters, equivalent in spirit to the notebook cuts.
   int blob_dt;
   int blob_dp;
   int search_dt;
@@ -143,6 +145,7 @@ class InModuleTracks : public SubsysReco
   std::vector<unsigned int> m_tree_sector;
   std::vector<int> m_tree_side;
   std::vector<unsigned int> m_tree_nblobs;
+  std::vector<unsigned int> m_tree_nrawhits;
   std::vector<unsigned int> m_tree_first_layer;
   std::vector<unsigned int> m_tree_last_layer;
 
@@ -155,13 +158,18 @@ class InModuleTracks : public SubsysReco
   std::vector<int> m_tree_ndof_pad;
   std::vector<int> m_tree_ndof_tbin;
 
-  // Flat per-blob/per-track content for easy TTree reading.
+  // Flat per-raw-hit/per-track content for easy TTree reading.
+  std::vector<unsigned int> m_tree_hit_event;
   std::vector<unsigned int> m_tree_hit_track_id;
   std::vector<unsigned int> m_tree_hit_region;
   std::vector<unsigned int> m_tree_hit_sector;
   std::vector<int> m_tree_hit_side;
   std::vector<unsigned int> m_tree_hit_layer;
+  std::vector<unsigned long long> m_tree_hit_hitsetkey;
+  std::vector<unsigned long long> m_tree_hit_hitkey;
   std::vector<double> m_tree_hit_pad;
   std::vector<double> m_tree_hit_tbin;
   std::vector<double> m_tree_hit_adc;
+  std::vector<double> m_tree_hit_local_phi;
+  std::vector<double> m_tree_hit_local_radius;
 };

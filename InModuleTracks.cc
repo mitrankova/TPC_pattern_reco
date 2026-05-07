@@ -108,6 +108,8 @@ namespace
                             double floor_frac,
                             InModuleThreadData::Track& trk)
   {
+    // This blob-center fit is used only during pattern-recognition growth
+    // to predict the next layer. The final saved fit is done later on raw hits.
     if (idx.size() < 2) return false;
 
     double maxadc = 0.0;
@@ -150,6 +152,7 @@ namespace
     trk.first_layer = first_layer;
     trk.last_layer = last_layer;
     trk.nblobs = static_cast<unsigned int>(idx.size());
+    trk.nrawhits = 0;
     trk.pad_slope = mp;
     trk.pad_intercept = bp;
     trk.tbin_slope = mt;
@@ -159,9 +162,201 @@ namespace
     trk.ndof_pad = ndp;
     trk.ndof_tbin = ndt;
     trk.blob_indices = idx;
+    trk.raw_hit_indices.clear();
 
     return true;
   }
+
+  void collect_raw_indices_from_blob_chain(const std::vector<InModuleThreadData::Blob>& blobs,
+                                           const std::vector<unsigned int>& blob_idx,
+                                           std::vector<unsigned int>& raw_idx)
+  {
+    raw_idx.clear();
+    for (unsigned int ib = 0; ib < blob_idx.size(); ++ib)
+    {
+      const InModuleThreadData::Blob& bl = blobs[blob_idx[ib]];
+      for (unsigned int ir = 0; ir < bl.raw_hit_indices.size(); ++ir)
+      {
+        raw_idx.push_back(bl.raw_hit_indices[ir]);
+      }
+    }
+  }
+
+  bool robust_fit_track_from_raw_hits(const std::vector<InModuleThreadData::RawHit>& raw_hits,
+                                      const std::vector<InModuleThreadData::Blob>& blobs,
+                                      const std::vector<unsigned int>& blob_idx,
+                                      double weight_power,
+                                      double floor_frac,
+                                      InModuleThreadData::Track& trk)
+  {
+    // Final fit: use every raw ADC cell belonging to the blobs on this track.
+    // ADC gives the base weight. A simple Huber-style iterative reweighting
+    // down-weights raw cells with large 2D residuals in pad/tbin.
+    std::vector<unsigned int> raw_idx;
+    collect_raw_indices_from_blob_chain(blobs, blob_idx, raw_idx);
+    if (raw_idx.size() < 2) return false;
+
+    double maxadc = 0.0;
+    unsigned int first_layer = 999999;
+    unsigned int last_layer = 0;
+
+    for (unsigned int i = 0; i < raw_idx.size(); ++i)
+    {
+      const InModuleThreadData::RawHit& rh = raw_hits[raw_idx[i]];
+      if (rh.adc > maxadc) maxadc = rh.adc;
+      if (rh.layer < first_layer) first_layer = rh.layer;
+      if (rh.layer > last_layer) last_layer = rh.layer;
+    }
+
+    std::vector<double> x;
+    std::vector<double> pad;
+    std::vector<double> tbin;
+    std::vector<double> base_w;
+    std::vector<double> w;
+
+    x.reserve(raw_idx.size());
+    pad.reserve(raw_idx.size());
+    tbin.reserve(raw_idx.size());
+    base_w.reserve(raw_idx.size());
+    w.reserve(raw_idx.size());
+
+    for (unsigned int i = 0; i < raw_idx.size(); ++i)
+    {
+      const InModuleThreadData::RawHit& rh = raw_hits[raw_idx[i]];
+      x.push_back(static_cast<double>(rh.layer));
+      pad.push_back(static_cast<double>(rh.pad));
+      tbin.push_back(static_cast<double>(rh.tbin));
+      base_w.push_back(adc_weight(static_cast<double>(rh.adc), maxadc,
+                                  weight_power, floor_frac));
+      w.push_back(base_w.back());
+    }
+
+    double mp = 0.0, bp = 0.0, cp = 0.0;
+    double mt = 0.0, bt = 0.0, ct = 0.0;
+    int ndp = 0, ndt = 0;
+
+    const double huber_c = 2.5;
+    for (unsigned int iter = 0; iter < 5; ++iter)
+    {
+      if (!weighted_line_fit(x, pad, w, mp, bp, cp, ndp)) return false;
+      if (!weighted_line_fit(x, tbin, w, mt, bt, ct, ndt)) return false;
+
+      double sw = 0.0;
+      double sp2 = 0.0;
+      double st2 = 0.0;
+      for (unsigned int i = 0; i < x.size(); ++i)
+      {
+        const double rp = pad[i] - (mp * x[i] + bp);
+        const double rt = tbin[i] - (mt * x[i] + bt);
+        sw += base_w[i];
+        sp2 += base_w[i] * rp * rp;
+        st2 += base_w[i] * rt * rt;
+      }
+
+      double scale_p = 1.0;
+      double scale_t = 1.0;
+      if (sw > 0.0)
+      {
+        scale_p = std::sqrt(sp2 / sw);
+        scale_t = std::sqrt(st2 / sw);
+      }
+      if (scale_p < 1.0) scale_p = 1.0;
+      if (scale_t < 1.0) scale_t = 1.0;
+
+      for (unsigned int i = 0; i < x.size(); ++i)
+      {
+        const double rp = pad[i] - (mp * x[i] + bp);
+        const double rt = tbin[i] - (mt * x[i] + bt);
+        const double r = std::sqrt((rp / scale_p) * (rp / scale_p) +
+                                   (rt / scale_t) * (rt / scale_t));
+        double robust = 1.0;
+        if (r > huber_c) robust = huber_c / r;
+        w[i] = base_w[i] * robust;
+      }
+    }
+
+    if (!weighted_line_fit(x, pad, w, mp, bp, cp, ndp)) return false;
+    if (!weighted_line_fit(x, tbin, w, mt, bt, ct, ndt)) return false;
+
+    trk.first_layer = first_layer;
+    trk.last_layer = last_layer;
+    trk.nblobs = static_cast<unsigned int>(blob_idx.size());
+    trk.nrawhits = static_cast<unsigned int>(raw_idx.size());
+    trk.pad_slope = mp;
+    trk.pad_intercept = bp;
+    trk.tbin_slope = mt;
+    trk.tbin_intercept = bt;
+    trk.chi2_pad = cp;
+    trk.chi2_tbin = ct;
+    trk.ndof_pad = ndp;
+    trk.ndof_tbin = ndt;
+    trk.blob_indices = blob_idx;
+    trk.raw_hit_indices = raw_idx;
+
+    return true;
+  }
+
+  static const int N_MODULES = 3;
+  static const int N_ROWS = 16;
+
+  static const int Npads[N_MODULES] =
+  {
+    94, 128, 192
+  };
+
+  static const double phi_bin_width[N_MODULES] =
+  {
+    0.0053073,
+    0.003959,
+    0.00265145
+  };
+
+  static const double module_radius[N_MODULES][N_ROWS] =
+  {
+    {
+      29.854978828112735, 31.869737083177956, 32.43665978627038,
+      33.00171100689825,  33.56863172731403,  34.133682357783,
+      34.70060474122243,  35.26565540941076,  35.83257683544541,
+      36.39762877363545,  36.964549975549694, 37.52960055896088,
+      38.09652180558749,  38.66157293473739,  39.228495272708216,
+      39.793545257944906
+    },
+    {
+      41.65920253621078,  42.67990048015332,  43.7005755287188,
+      44.7212729094545,   45.7419615067264,   46.76264656230158,
+      47.78333428983602,  48.80401878201343,  49.82471910526506,
+      50.8454060012135,   51.866093793785126, 52.88677964073831,
+      53.90746625152035,  54.92815969895385,  55.948864895868056,
+      56.9695394315422
+    },
+    {
+      58.910963349324035, 60.00800996331871,  61.10505851260341,
+      62.202104676954924, 63.29915863086735,  64.39619682986867,
+      65.49324606923312,  66.59029899562653,  67.68734047670296,
+      68.78439383353172,  69.88143340055497,  70.97848786511186,
+      72.07553264226554,  73.17257662017182,  74.2696338511705,
+      75.36667517343196
+    }
+  };
+
+  double get_local_phi(unsigned int region, unsigned int pad)
+  {
+    if (region >= N_MODULES) return 0.0;
+    return static_cast<double>(pad) * phi_bin_width[region];
+  }
+
+  double get_local_radius(unsigned int region, unsigned int layer)
+  {
+    if (region >= N_MODULES) return 0.0;
+
+    const int ilayer =
+      static_cast<int>(layer) - 7 - static_cast<int>(region) * 16;
+
+    if (ilayer < 0 || ilayer >= N_ROWS) return 0.0;
+
+    return module_radius[region][ilayer];
+  }
+
 
   void collect_raw_hits(InModuleThreadData* d)
   {
@@ -187,9 +382,13 @@ namespace
 
         InModuleThreadData::RawHit rh;
         rh.layer = d->layer_hitsets[ihs].layer;
+        rh.hitsetkey = d->layer_hitsets[ihs].hitsetkey;
+        rh.hitkey = hitkey;
         rh.pad = pad;
         rh.tbin = tbin;
         rh.adc = static_cast<unsigned short>(fadc);
+        rh.local_phi = get_local_phi(d->region, pad);
+        rh.local_radius = get_local_radius(d->region, rh.layer);
         d->raw_hits.push_back(rh);
       }
     }
@@ -215,12 +414,15 @@ namespace
       unsigned int nh = 0;
       const unsigned int layer = d->raw_hits[i].layer;
 
+      InModuleThreadData::Blob bl;
+
       while (!q.empty())
       {
         const unsigned int a = q.front();
         q.pop_front();
 
         const InModuleThreadData::RawHit& ha = d->raw_hits[a];
+        bl.raw_hit_indices.push_back(a);
         const double wa = static_cast<double>(ha.adc);
         sw += wa;
         sp += wa * static_cast<double>(ha.pad);
@@ -245,7 +447,6 @@ namespace
 
       if (sw <= 0.0) continue;
 
-      InModuleThreadData::Blob bl;
       bl.layer = layer;
       bl.pad = sp / sw;
       bl.tbin = st / sw;
@@ -368,7 +569,8 @@ namespace
 
       InModuleThreadData::Track trk;
       trk.track_id = tid;
-      if (fit_track_from_blobs(d->blobs, chain, d->weight_power, d->adc_weight_floor_frac, trk))
+      if (robust_fit_track_from_raw_hits(d->raw_hits, d->blobs, chain,
+                                         d->weight_power, d->adc_weight_floor_frac, trk))
       {
         trk.track_id = tid;
         d->tracks.push_back(trk);
@@ -408,13 +610,13 @@ InModuleThreadData::LayerHitSet::LayerHitSet()
   : layer(0), hitsetkey(0), hitset(0) {}
 
 InModuleThreadData::RawHit::RawHit()
-  : layer(0), pad(0), tbin(0), adc(0) {}
+  : layer(0), hitsetkey(0), hitkey(0), pad(0), tbin(0), adc(0), local_phi(0.0), local_radius(0.0) {}
 
 InModuleThreadData::Blob::Blob()
   : layer(0), pad(0.0), tbin(0.0), adc(0.0), nhits(0), used(0) {}
 
 InModuleThreadData::Track::Track()
-  : track_id(0), first_layer(0), last_layer(0), nblobs(0),
+  : track_id(0), first_layer(0), last_layer(0), nblobs(0), nrawhits(0),
     pad_slope(0.0), pad_intercept(0.0), tbin_slope(0.0), tbin_intercept(0.0),
     chi2_pad(0.0), chi2_tbin(0.0), ndof_pad(0), ndof_tbin(0) {}
 
@@ -479,6 +681,7 @@ int InModuleTracks::Init(PHCompositeNode*)
   m_tree->Branch("sector", &m_tree_sector);
   m_tree->Branch("side", &m_tree_side);
   m_tree->Branch("nblobs", &m_tree_nblobs);
+  m_tree->Branch("nrawhits", &m_tree_nrawhits);
   m_tree->Branch("first_layer", &m_tree_first_layer);
   m_tree->Branch("last_layer", &m_tree_last_layer);
 
@@ -491,14 +694,19 @@ int InModuleTracks::Init(PHCompositeNode*)
   m_tree->Branch("ndof_pad", &m_tree_ndof_pad);
   m_tree->Branch("ndof_tbin", &m_tree_ndof_tbin);
 
+  m_tree->Branch("hit_event", &m_tree_hit_event);
   m_tree->Branch("hit_track_id", &m_tree_hit_track_id);
   m_tree->Branch("hit_region", &m_tree_hit_region);
   m_tree->Branch("hit_sector", &m_tree_hit_sector);
   m_tree->Branch("hit_side", &m_tree_hit_side);
   m_tree->Branch("hit_layer", &m_tree_hit_layer);
+  m_tree->Branch("hit_hitsetkey", &m_tree_hit_hitsetkey);
+  m_tree->Branch("hit_hitkey", &m_tree_hit_hitkey);
   m_tree->Branch("hit_pad", &m_tree_hit_pad);
   m_tree->Branch("hit_tbin", &m_tree_hit_tbin);
   m_tree->Branch("hit_adc", &m_tree_hit_adc);
+  m_tree->Branch("hit_local_phi", &m_tree_hit_local_phi);
+  m_tree->Branch("hit_local_radius", &m_tree_hit_local_radius);
 
   std::cout << Name() << "::Init - output file " << m_outputFileName << " created" << std::endl;
   return Fun4AllReturnCodes::EVENT_OK;
@@ -549,12 +757,13 @@ int InModuleTracks::getNodes(PHCompositeNode* topNode)
 void InModuleTracks::reset_tree_vars()
 {
   m_tree_event = m_event;
-
+  m_tree_hit_event.clear();
   m_tree_track_id.clear();
   m_tree_region.clear();
   m_tree_sector.clear();
   m_tree_side.clear();
   m_tree_nblobs.clear();
+  m_tree_nrawhits.clear();
   m_tree_first_layer.clear();
   m_tree_last_layer.clear();
 
@@ -572,9 +781,13 @@ void InModuleTracks::reset_tree_vars()
   m_tree_hit_sector.clear();
   m_tree_hit_side.clear();
   m_tree_hit_layer.clear();
+  m_tree_hit_hitsetkey.clear();
+  m_tree_hit_hitkey.clear();
   m_tree_hit_pad.clear();
   m_tree_hit_tbin.clear();
   m_tree_hit_adc.clear();
+  m_tree_hit_local_phi.clear();
+m_tree_hit_local_radius.clear();
 }
 
 int InModuleTracks::process_event(PHCompositeNode*)
@@ -681,6 +894,7 @@ int InModuleTracks::process_event(PHCompositeNode*)
       m_tree_sector.push_back(td.sector);
       m_tree_side.push_back(td.side);
       m_tree_nblobs.push_back(tr.nblobs);
+      m_tree_nrawhits.push_back(tr.nrawhits);
       m_tree_first_layer.push_back(tr.first_layer);
       m_tree_last_layer.push_back(tr.last_layer);
 
@@ -693,17 +907,22 @@ int InModuleTracks::process_event(PHCompositeNode*)
       m_tree_ndof_pad.push_back(tr.ndof_pad);
       m_tree_ndof_tbin.push_back(tr.ndof_tbin);
 
-      for (unsigned int ib = 0; ib < tr.blob_indices.size(); ++ib)
+      for (unsigned int ih = 0; ih < tr.raw_hit_indices.size(); ++ih)
       {
-        const InModuleThreadData::Blob& bl = td.blobs[tr.blob_indices[ib]];
+        const InModuleThreadData::RawHit& rh = td.raw_hits[tr.raw_hit_indices[ih]];
+        m_tree_hit_event.push_back(m_event);
         m_tree_hit_track_id.push_back(global_track_id);
         m_tree_hit_region.push_back(td.region);
         m_tree_hit_sector.push_back(td.sector);
         m_tree_hit_side.push_back(td.side);
-        m_tree_hit_layer.push_back(bl.layer);
-        m_tree_hit_pad.push_back(bl.pad);
-        m_tree_hit_tbin.push_back(bl.tbin);
-        m_tree_hit_adc.push_back(bl.adc);
+        m_tree_hit_layer.push_back(rh.layer);
+        m_tree_hit_hitsetkey.push_back(static_cast<unsigned long long>(rh.hitsetkey));
+        m_tree_hit_hitkey.push_back(static_cast<unsigned long long>(rh.hitkey));
+        m_tree_hit_pad.push_back(static_cast<double>(rh.pad));
+        m_tree_hit_tbin.push_back(static_cast<double>(rh.tbin));
+        m_tree_hit_adc.push_back(static_cast<double>(rh.adc));
+        m_tree_hit_local_phi.push_back(rh.local_phi);
+        m_tree_hit_local_radius.push_back(rh.local_radius);
       }
     }
   }
@@ -714,7 +933,7 @@ int InModuleTracks::process_event(PHCompositeNode*)
   {
     std::cout << Name() << "::process_event - event " << m_event
               << " tracks=" << m_tree_track_id.size()
-              << " track-blobs=" << m_tree_hit_track_id.size() << std::endl;
+              << " track-raw-hits=" << m_tree_hit_track_id.size() << std::endl;
   }
 
   ++m_event;
