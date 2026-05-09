@@ -1,52 +1,30 @@
 #pragma once
 
-#include "InModuleTrack.h"
-
 #include <phool/PHObject.h>
 
-#include <vector>
 #include <iostream>
 
+class InModuleTrack;
+
+// Abstract container for in-module tracks.
+// Concrete storage is in versioned subclasses (InModuleTrackContainerv1, ...).
 class InModuleTrackContainer : public PHObject
 {
  public:
-  InModuleTrackContainer();
-  virtual ~InModuleTrackContainer() {}
+  InModuleTrackContainer() = default;
+  ~InModuleTrackContainer() override = default;
 
-  void identify(std::ostream& os = std::cout) const;
-  void Reset();
-  int isValid() const;
-  PHObject* CloneMe() const { return new InModuleTrackContainer(*this); }
+  void identify(std::ostream& os = std::cout) const override;
+  void Reset() override;
+  int isValid() const override;
 
-  unsigned int size() const
-  {
-    return static_cast<unsigned int>(m_tracks.size());
-  }
+  virtual unsigned int size() const { return 0; }
 
-  void add_track(const InModuleTrack& trk)
-  {
-    m_tracks.push_back(trk);
-  }
+  virtual void add_track(InModuleTrack* /*trk*/) {}
 
-  const InModuleTrack* get_track(unsigned int i) const
-  {
-    if (i >= m_tracks.size()) return 0;
-    return &m_tracks[i];
-  }
-
-  InModuleTrack* get_track(unsigned int i)
-  {
-    if (i >= m_tracks.size()) return 0;
-    return &m_tracks[i];
-  }
-
-  const std::vector<InModuleTrack>& get_tracks() const
-  {
-    return m_tracks;
-  }
+  virtual const InModuleTrack* get_track(unsigned int /*i*/) const { return nullptr; }
+  virtual InModuleTrack* get_track(unsigned int /*i*/) { return nullptr; }
 
  private:
-  std::vector<InModuleTrack> m_tracks;
-
-  ClassDef(InModuleTrackContainer, 1)
+  ClassDefOverride(InModuleTrackContainer, 0)
 };

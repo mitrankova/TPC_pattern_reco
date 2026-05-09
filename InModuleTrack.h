@@ -1,121 +1,100 @@
 #pragma once
 
-#include "InModuleTrackHit.h"
+#include <trackbase/TrkrDefs.h>
 
 #include <phool/PHObject.h>
 
-#include <vector>
 #include <iostream>
+#include <utility>
+#include <vector>
 
+// A single in-module track.
+// Concrete data are stored in versioned subclasses (InModuleTrackv1, ...).
+// Instead of owning InModuleTrackHit objects, tracks now store
+// (hitsetkey, hitkey) index pairs that reference hits in TrkrHitSetContainer.
 class InModuleTrack : public PHObject
 {
  public:
-  InModuleTrack();
-  virtual ~InModuleTrack() {}
+  InModuleTrack() = default;
+  ~InModuleTrack() override = default;
 
-  void identify(std::ostream& os = std::cout) const;
-  void Reset();
-  int isValid() const;
-  PHObject* CloneMe() const { return new InModuleTrack(*this); }
+  void identify(std::ostream& os = std::cout) const override;
+  void Reset() override;
+  int isValid() const override;
 
-  unsigned int get_event() const { return m_event; }
-  unsigned int get_track_id() const { return m_track_id; }
+  // --- Identity ---
+  virtual unsigned int get_event() const { return 0; }
+  virtual unsigned int get_track_id() const { return 0; }
 
-  unsigned int get_region() const { return m_region; }
-  unsigned int get_sector() const { return m_sector; }
-  int get_side() const { return m_side; }
+  virtual unsigned int get_region() const { return 0; }
+  virtual unsigned int get_sector() const { return 0; }
+  virtual int get_side() const { return 0; }
 
-  unsigned int get_nblobs() const { return m_nblobs; }
-  unsigned int get_nrawhits() const { return m_nrawhits; }
+  // --- Topology ---
+  virtual unsigned int get_nblobs() const { return 0; }
+  virtual unsigned int get_nrawhits() const { return 0; }
 
-  unsigned int get_first_layer() const { return m_first_layer; }
-  unsigned int get_last_layer() const { return m_last_layer; }
+  virtual unsigned int get_first_layer() const { return 0; }
+  virtual unsigned int get_last_layer() const { return 0; }
 
-  double get_pad_slope() const { return m_pad_slope; }
-  double get_pad_intercept() const { return m_pad_intercept; }
+  // --- Fit parameters ---
+  virtual double get_pad_slope() const { return 0; }
+  virtual double get_pad_intercept() const { return 0; }
 
-  double get_tbin_slope() const { return m_tbin_slope; }
-  double get_tbin_intercept() const { return m_tbin_intercept; }
+  virtual double get_tbin_slope() const { return 0; }
+  virtual double get_tbin_intercept() const { return 0; }
 
-  double get_chi2_pad() const { return m_chi2_pad; }
-  double get_chi2_tbin() const { return m_chi2_tbin; }
+  virtual double get_chi2_pad() const { return 0; }
+  virtual double get_chi2_tbin() const { return 0; }
 
-  int get_ndof_pad() const { return m_ndof_pad; }
-  int get_ndof_tbin() const { return m_ndof_tbin; }
+  virtual int get_ndof_pad() const { return 0; }
+  virtual int get_ndof_tbin() const { return 0; }
 
-  void set_event(unsigned int v) { m_event = v; }
-  void set_track_id(unsigned int v) { m_track_id = v; }
+  // --- Setters ---
+  virtual void set_event(unsigned int) {}
+  virtual void set_track_id(unsigned int) {}
 
-  void set_region(unsigned int v) { m_region = v; }
-  void set_sector(unsigned int v) { m_sector = v; }
-  void set_side(int v) { m_side = v; }
+  virtual void set_region(unsigned int) {}
+  virtual void set_sector(unsigned int) {}
+  virtual void set_side(int) {}
 
-  void set_nblobs(unsigned int v) { m_nblobs = v; }
-  void set_nrawhits(unsigned int v) { m_nrawhits = v; }
+  virtual void set_nblobs(unsigned int) {}
+  virtual void set_nrawhits(unsigned int) {}
 
-  void set_first_layer(unsigned int v) { m_first_layer = v; }
-  void set_last_layer(unsigned int v) { m_last_layer = v; }
+  virtual void set_first_layer(unsigned int) {}
+  virtual void set_last_layer(unsigned int) {}
 
-  void set_pad_slope(double v) { m_pad_slope = v; }
-  void set_pad_intercept(double v) { m_pad_intercept = v; }
+  virtual void set_pad_slope(double) {}
+  virtual void set_pad_intercept(double) {}
 
-  void set_tbin_slope(double v) { m_tbin_slope = v; }
-  void set_tbin_intercept(double v) { m_tbin_intercept = v; }
+  virtual void set_tbin_slope(double) {}
+  virtual void set_tbin_intercept(double) {}
 
-  void set_chi2_pad(double v) { m_chi2_pad = v; }
-  void set_chi2_tbin(double v) { m_chi2_tbin = v; }
+  virtual void set_chi2_pad(double) {}
+  virtual void set_chi2_tbin(double) {}
 
-  void set_ndof_pad(int v) { m_ndof_pad = v; }
-  void set_ndof_tbin(int v) { m_ndof_tbin = v; }
+  virtual void set_ndof_pad(int) {}
+  virtual void set_ndof_tbin(int) {}
 
-  void add_hit(const InModuleTrackHit& hit)
+  // --- Hit index access ---
+  // Hits are referenced as (hitsetkey, hitkey) pairs pointing into
+  // TrkrHitSetContainer; no hit data are owned by this object.
+  using HitIndex = std::pair<TrkrDefs::hitsetkey, TrkrDefs::hitkey>;
+
+  virtual void add_hit_index(TrkrDefs::hitsetkey /*hsk*/, TrkrDefs::hitkey /*hk*/) {}
+
+  virtual unsigned int size_hit_indices() const { return 0; }
+
+  virtual HitIndex get_hit_index(unsigned int /*i*/) const
   {
-    m_hits.push_back(hit);
+    return {0, 0};
   }
 
-  unsigned int size_hits() const
-  {
-    return static_cast<unsigned int>(m_hits.size());
-  }
-
-  const InModuleTrackHit* get_hit(unsigned int i) const
-  {
-    if (i >= m_hits.size()) return 0;
-    return &m_hits[i];
-  }
-
-  const std::vector<InModuleTrackHit>& get_hits() const
-  {
-    return m_hits;
-  }
+  virtual const std::vector<HitIndex>& get_hit_indices() const;
 
  private:
-  unsigned int m_event;
-  unsigned int m_track_id;
+  // Returned by the default get_hit_indices() implementation.
+  static const std::vector<HitIndex> s_empty_indices;
 
-  unsigned int m_region;
-  unsigned int m_sector;
-  int m_side;
-
-  unsigned int m_nblobs;
-  unsigned int m_nrawhits;
-
-  unsigned int m_first_layer;
-  unsigned int m_last_layer;
-
-  double m_pad_slope;
-  double m_pad_intercept;
-
-  double m_tbin_slope;
-  double m_tbin_intercept;
-
-  double m_chi2_pad;
-  double m_chi2_tbin;
-
-  int m_ndof_pad;
-  int m_ndof_tbin;
-
-  std::vector<InModuleTrackHit> m_hits;
-
-  ClassDef(InModuleTrack, 1)
+  ClassDefOverride(InModuleTrack, 0)
 };

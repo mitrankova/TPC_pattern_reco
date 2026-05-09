@@ -95,7 +95,9 @@ struct InModuleThreadData
     // Blob indices used by this track.
     std::vector<unsigned int> blob_indices;
 
-    // Raw-hit indices used by this track.
+    // Raw-hit indices into InModuleThreadData::raw_hits used by this track.
+    // These are translated to (hitsetkey, hitkey) pairs when filling the
+    // output InModuleTrack objects.
     std::vector<unsigned int> raw_hit_indices;
   };
 
@@ -121,8 +123,6 @@ struct InModuleThreadData
   unsigned int min_track_blobs;
 
   // Track-piece connection.
-  // These parameters are used to connect disconnected chains inside one module,
-  // for example across dead regions or missing layers.
   unsigned int connect_max_layer_gap;
 
   double connect_dp;
@@ -182,25 +182,17 @@ class InModuleTracks : public SubsysReco
     m_minTrackBlobs = n;
   }
 
-  // Maximum number of missing layers allowed between two disconnected
-  // track pieces that can still be connected.
   void setConnectMaxLayerGap(unsigned int n)
   {
     m_connectMaxLayerGap = n;
   }
 
-  // Matching window for connecting track pieces.
-  // dt is the allowed tbin difference at the connection layer.
-  // dp is the allowed pad difference at the connection layer.
   void setConnectWindow(double dt, double dp)
   {
     m_connect_dt = dt;
     m_connect_dp = dp;
   }
 
-  // Matching window for slope compatibility between track pieces.
-  // dtbin_slope is in tbin/layer.
-  // dpad_slope is in pad/layer.
   void setConnectSlopeWindow(double dtbin_slope, double dpad_slope)
   {
     m_connect_dtbin_slope = dtbin_slope;
@@ -260,7 +252,6 @@ class InModuleTracks : public SubsysReco
   std::vector<unsigned int> m_tree_first_layer;
   std::vector<unsigned int> m_tree_last_layer;
 
-  // Final fit parameters saved after possible track-piece connection.
   std::vector<double> m_tree_pad_slope;
   std::vector<double> m_tree_pad_intercept;
 
@@ -273,7 +264,9 @@ class InModuleTracks : public SubsysReco
   std::vector<int> m_tree_ndof_pad;
   std::vector<int> m_tree_ndof_tbin;
 
-  // Flat per-raw-hit/per-track content for easy TTree reading.
+  // Flat per-hit content for TTree reading.
+  // Hits are identified by their TrkrHitSetContainer keys only;
+  // no hit data is duplicated here.
   std::vector<unsigned int> m_tree_hit_event;
   std::vector<unsigned int> m_tree_hit_track_id;
 
@@ -285,11 +278,4 @@ class InModuleTracks : public SubsysReco
 
   std::vector<unsigned long long> m_tree_hit_hitsetkey;
   std::vector<unsigned long long> m_tree_hit_hitkey;
-
-  std::vector<double> m_tree_hit_pad;
-  std::vector<double> m_tree_hit_tbin;
-  std::vector<double> m_tree_hit_adc;
-
-  std::vector<double> m_tree_hit_local_phi;
-  std::vector<double> m_tree_hit_local_radius;
 };
