@@ -32,6 +32,7 @@
 #include <limits>
 #include <map>
 #include <stdint.h>
+#include <utility>
 #include <vector>
 
 // ===================================================================
@@ -481,6 +482,123 @@ namespace
   // -------------------------------------------------------------------
   // Per-module worker functions (exact originals)
   // -------------------------------------------------------------------
+
+  struct RawHitTimeSort
+  {
+    const std::vector<InModuleThreadData::RawHit>* raw_hits;
+    RawHitTimeSort(const std::vector<InModuleThreadData::RawHit>* h) : raw_hits(h) {}
+    bool operator()(unsigned int a, unsigned int b) const
+    {
+      const InModuleThreadData::RawHit& ha = (*raw_hits)[a];
+      const InModuleThreadData::RawHit& hb = (*raw_hits)[b];
+      if (ha.tbin != hb.tbin) return ha.tbin < hb.tbin;
+      return ha.adc > hb.adc;
+    }
+  };
+
+  void reject_long_pad_noise(InModuleThreadData* d)
+  {
+    if (!d) return;
+    if (d->noise_max_consecutive_timebins <= 0) return;
+    if (d->noise_keep_first_timebins < 0) d->noise_keep_first_timebins = 0;
+    if (d->raw_hits.empty()) return;
+
+    typedef std::pair<unsigned int, unsigned short> LayerPadKey;
+    std::map<LayerPadKey, std::vector<unsigned int> > by_layer_pad;
+
+    for (unsigned int i = 0; i < d->raw_hits.size(); ++i)
+    {
+      const InModuleThreadData::RawHit& rh = d->raw_hits[i];
+      by_layer_pad[LayerPadKey(rh.layer, rh.pad)].push_back(i);
+    }
+
+    std::vector<int> remove(d->raw_hits.size(), 0);
+    unsigned int nremoved = 0;
+
+    for (std::map<LayerPadKey, std::vector<unsigned int> >::iterator it = by_layer_pad.begin();
+         it != by_layer_pad.end(); ++it)
+    {
+      std::vector<unsigned int>& idx = it->second;
+      if (idx.size() <= static_cast<unsigned int>(d->noise_max_consecutive_timebins)) continue;
+
+      std::sort(idx.begin(), idx.end(), RawHitTimeSort(&d->raw_hits));
+
+      unsigned int run_start = 0;
+      while (run_start < idx.size())
+      {
+        unsigned int run_end = run_start;
+        while (run_end + 1 < idx.size())
+        {
+          const unsigned short t0 = d->raw_hits[idx[run_end]].tbin;
+          const unsigned short t1 = d->raw_hits[idx[run_end + 1]].tbin;
+          if (static_cast<int>(t1) != static_cast<int>(t0) + 1) break;
+          ++run_end;
+        }
+
+        const unsigned int run_len = run_end - run_start + 1;
+        if (run_len > static_cast<unsigned int>(d->noise_max_consecutive_timebins))
+        {
+          const unsigned int keep_until =
+            run_start + static_cast<unsigned int>(d->noise_keep_first_timebins);
+
+          //bool in_non_increasing_tail = true;
+          for (unsigned int ir = run_start; ir <= run_end; ++ir)
+          {
+            if (ir < keep_until) continue;
+
+            const unsigned int cur_idx  = idx[ir];
+            const unsigned int prev_idx = idx[ir - 1];
+
+            const unsigned short cur_adc  = d->raw_hits[cur_idx].adc;
+            const unsigned short prev_adc = d->raw_hits[prev_idx].adc;
+
+
+
+            const int cur_adc_i  = static_cast<int>(cur_adc);
+            const int prev_adc_i = static_cast<int>(prev_adc);
+            const int tol        = d->noise_adc_tolerance;
+
+            // remove tail if ADC is flat, decreasing, or only mildly increasing
+            if (cur_adc_i <= prev_adc_i + tol)
+            {
+              if (!remove[cur_idx])
+              {
+                remove[cur_idx] = 1;
+                ++nremoved;
+              }
+            }
+            else
+            {
+              // Preserve a later rising signal on top of the long pad tail.
+             // in_non_increasing_tail = false;
+            }
+          }
+        }
+
+        run_start = run_end + 1;
+      }
+    }
+
+    if (nremoved == 0) return;
+
+    std::vector<InModuleThreadData::RawHit> kept;
+    kept.reserve(d->raw_hits.size() - nremoved);
+    for (unsigned int i = 0; i < d->raw_hits.size(); ++i)
+    {
+      if (!remove[i]) kept.push_back(d->raw_hits[i]);
+    }
+
+    d->raw_hits.swap(kept);
+
+    if (d->verbosity > 1)
+    {
+      std::cout << "InModuleTracks noise rejection: region=" << d->region
+                << " sector=" << d->sector << " side=" << d->side
+                << " removed " << nremoved << " long same-pad tail hits"
+                << std::endl;
+    }
+  }
+
   void collect_raw_hits(InModuleThreadData* d)
   {
     d->raw_hits.clear();
@@ -698,6 +816,7 @@ namespace
     if (!d) return 0;
 
     collect_raw_hits(d);
+    reject_long_pad_noise(d);
     build_blobs(d);
     build_tracks_linear(d);
     connect_track_pieces_in_module(d);
@@ -741,6 +860,7 @@ InModuleThreadData::Track::Track()
 InModuleThreadData::InModuleThreadData()
   : region(0), sector(0), side(0), module_key(0), tGeometry(0),
     pedestal(74.4), verbosity(0),
+    noise_max_consecutive_timebins(10), noise_keep_first_timebins(3), noise_adc_tolerance(5),
     blob_dt(2), blob_dp(2),
     search_dt(6), search_dp(6),
     min_track_blobs(4),
@@ -764,6 +884,9 @@ InModuleTracks::InModuleTracks(const std::string& name,
     m_event(0),
     m_maxThreads(72),
     m_pedestal(0.0),
+    m_noiseMaxConsecutiveTimebins(10),
+    m_noiseKeepFirstTimebins(3),
+    m_noiseAdcTolerance(5),
     m_blob_dt(2),
     m_blob_dp(2),
     m_search_dt(6),
@@ -966,6 +1089,9 @@ int InModuleTracks::process_event(PHCompositeNode*)
         td.tGeometry          = m_tGeometry;
         td.pedestal           = m_pedestal;
         td.verbosity          = Verbosity();
+        td.noise_max_consecutive_timebins = m_noiseMaxConsecutiveTimebins;
+        td.noise_keep_first_timebins      = m_noiseKeepFirstTimebins;
+        td.noise_adc_tolerance = m_noiseAdcTolerance;
         td.blob_dt            = m_blob_dt;
         td.blob_dp            = m_blob_dp;
         td.search_dt          = m_search_dt;

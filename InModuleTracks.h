@@ -113,6 +113,11 @@ struct InModuleThreadData
   double pedestal;
   int verbosity;
 
+  // Noise rejection
+  int noise_max_consecutive_timebins;
+  int noise_keep_first_timebins;
+  int noise_adc_tolerance;  
+
   // Blob building
   int blob_dt;
   int blob_dp;
@@ -177,6 +182,20 @@ class InModuleTracks : public SubsysReco
     m_search_dp = dp;
   }
 
+  // Reject long same-pad tails before blob/track building.
+  // If a same-layer/same-pad consecutive-timebin run is longer than
+  // max_consecutive_timebins, keep the first keep_first_timebins hits and
+  // remove the following non-increasing tail.
+  // Defaults: max_consecutive_timebins = 40, keep_first_timebins = 3.
+  void setNoiseRejection(int max_consecutive_timebins = 10,
+                         int keep_first_timebins = 3,
+                         int adc_tolerance = 5)
+  {
+    m_noiseMaxConsecutiveTimebins = max_consecutive_timebins;
+    m_noiseKeepFirstTimebins = keep_first_timebins;
+    m_noiseAdcTolerance = adc_tolerance;
+  }
+
   void setMinTrackBlobs(unsigned int n)
   {
     m_minTrackBlobs = n;
@@ -218,6 +237,11 @@ class InModuleTracks : public SubsysReco
 
   // General configuration
   double m_pedestal;
+
+  // Noise rejection
+  int m_noiseMaxConsecutiveTimebins;
+  int m_noiseKeepFirstTimebins;
+  int m_noiseAdcTolerance;
 
   // Blob building
   int m_blob_dt;
