@@ -71,6 +71,61 @@ class InModuleTrackv1 : public InModuleTrack
   void set_ndof_pad(int v) override { m_ndof_pad = v; }
   void set_ndof_tbin(int v) override { m_ndof_tbin = v; }
 
+
+  void set_local_fit_mode(int v) override { m_local_fit_mode = v; }
+  int get_local_fit_mode() const override { return m_local_fit_mode; }
+
+  void set_radius_tbin_slope(double v) override { m_radius_tbin_slope = v; }
+  void set_radius_tbin_intercept(double v) override { m_radius_tbin_intercept = v; }
+  void set_chi2_radius_tbin(double v) override { m_chi2_radius_tbin = v; }
+  void set_ndof_radius_tbin(int v) override { m_ndof_radius_tbin = v; }
+
+  double get_radius_tbin_slope() const override { return m_radius_tbin_slope; }
+  double get_radius_tbin_intercept() const override { return m_radius_tbin_intercept; }
+  double get_chi2_radius_tbin() const override { return m_chi2_radius_tbin; }
+  int get_ndof_radius_tbin() const override { return m_ndof_radius_tbin; }
+
+  void set_radius_phi_slope(double v) override { m_radius_phi_slope = v; }
+  void set_radius_phi_intercept(double v) override { m_radius_phi_intercept = v; }
+  void set_chi2_radius_phi_line(double v) override { m_chi2_radius_phi_line = v; }
+  void set_ndof_radius_phi_line(int v) override { m_ndof_radius_phi_line = v; }
+
+  double get_radius_phi_slope() const override { return m_radius_phi_slope; }
+  double get_radius_phi_intercept() const override { return m_radius_phi_intercept; }
+  double get_chi2_radius_phi_line() const override { return m_chi2_radius_phi_line; }
+  int get_ndof_radius_phi_line() const override { return m_ndof_radius_phi_line; }
+
+  void set_circle_x0(double v) override { m_circle_x0 = v; }
+  void set_circle_y0(double v) override { m_circle_y0 = v; }
+  void set_circle_radius(double v) override { m_circle_radius = v; }
+  void set_chi2_radius_phi_circle(double v) override { m_chi2_radius_phi_circle = v; }
+  void set_ndof_radius_phi_circle(int v) override { m_ndof_radius_phi_circle = v; }
+
+  double get_circle_x0() const override { return m_circle_x0; }
+  double get_circle_y0() const override { return m_circle_y0; }
+  double get_circle_radius() const override { return m_circle_radius; }
+  double get_chi2_radius_phi_circle() const override { return m_chi2_radius_phi_circle; }
+  int get_ndof_radius_phi_circle() const override { return m_ndof_radius_phi_circle; }
+
+  void set_has_sagitta_fit(int v) override { m_has_sagitta_fit = v; }
+  void set_sagitta_S(double v) override { m_sagitta_S = v; }
+  void set_sagitta_x0(double v) override { m_sagitta_x0 = v; }
+  void set_sagitta_invR(double v) override { m_sagitta_invR = v; }
+  void set_sagitta_theta(double v) override { m_sagitta_theta = v; }
+  void set_sagitta_b(double v) override { m_sagitta_b = v; }
+  void set_chi2_radius_phi_sagitta(double v) override { m_chi2_radius_phi_sagitta = v; }
+  void set_ndof_radius_phi_sagitta(int v) override { m_ndof_radius_phi_sagitta = v; }
+
+  int get_has_sagitta_fit() const override { return m_has_sagitta_fit; }
+  double get_sagitta_S() const override { return m_sagitta_S; }
+  double get_sagitta_x0() const override { return m_sagitta_x0; }
+  double get_sagitta_invR() const override { return m_sagitta_invR; }
+  double get_sagitta_theta() const override { return m_sagitta_theta; }
+  double get_sagitta_b() const override { return m_sagitta_b; }
+  double get_chi2_radius_phi_sagitta() const override { return m_chi2_radius_phi_sagitta; }
+  int get_ndof_radius_phi_sagitta() const override { return m_ndof_radius_phi_sagitta; }
+
+
   // --- Hit index access ---
   void add_hit_index(TrkrDefs::hitsetkey hsk, TrkrDefs::hitkey hk) override
   {
@@ -118,10 +173,36 @@ class InModuleTrackv1 : public InModuleTrack
 
   int m_ndof_pad {0};
   int m_ndof_tbin {0};
+  int m_local_fit_mode {0};
+
+  double m_radius_tbin_slope{0.0};
+  double m_radius_tbin_intercept{0.0};
+  double m_chi2_radius_tbin{0.0};
+  int    m_ndof_radius_tbin {0};
+
+  double m_radius_phi_slope{0.0};
+  double m_radius_phi_intercept{0.0};
+  double m_chi2_radius_phi_line{0.0};
+  int    m_ndof_radius_phi_line {0};
+
+  double m_circle_x0{0.0};
+  double m_circle_y0{0.0};
+  double m_circle_radius{0.0};
+  double m_chi2_radius_phi_circle{0.0};
+  int    m_ndof_radius_phi_circle {0};
+
+  int    m_has_sagitta_fit {0};
+  double m_sagitta_S {0.0};
+  double m_sagitta_x0 {0.0};
+  double m_sagitta_invR {0.0};
+  double m_sagitta_theta {0.0};
+  double m_sagitta_b {0.0};
+  double m_chi2_radius_phi_sagitta {0.0};
+  int    m_ndof_radius_phi_sagitta {0};
 
   // Each element is a (hitsetkey, hitkey) pair referencing a hit in
   // TrkrHitSetContainer.  No hit data are copied here.
   std::vector<HitIndex> m_hit_indices;
 
-  ClassDefOverride(InModuleTrackv1, 1)
+  ClassDefOverride(InModuleTrackv1, 2)
 };

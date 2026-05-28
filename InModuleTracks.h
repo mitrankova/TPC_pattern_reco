@@ -92,6 +92,46 @@ struct InModuleThreadData
     int ndof_pad;
     int ndof_tbin;
 
+
+    bool has_local_line_fit;
+    bool has_radius_phi_line_fit;
+    bool has_radius_phi_circle_fit;
+    bool has_sagitta_fit;
+
+    // Sagitta fit parameters in the rotated frame used by weighted_circle_fit.
+    // These are always set when use_field_on_fit=true, even when the
+    // conversion back to a circle center fails.  The display evaluates
+    // sagitta_model_invR(r, S, x0_rot, invR) directly so it never falls
+    // back to a straight radius-phi line.
+    //
+    //   local_x_rot =  cos(sagitta_theta)*local_x + sin(sagitta_theta)*(local_y - sagitta_b)
+    //   local_y_rot = -sin(sagitta_theta)*local_x + cos(sagitta_theta)*(local_y - sagitta_b)
+    //   phi_fit(r) = asin( sagitta_model_invR(r_rot, S, x0_rot, invR) / r )  ... see display
+    double sagitta_S;
+    double sagitta_x0;
+    double sagitta_invR;
+    double sagitta_theta;   // rotation angle: atan(slope of local_x vs local_y line fit)
+    double sagitta_b;       // y-intercept of the pre-rotation line fit
+
+    double radius_tbin_slope;
+    double radius_tbin_intercept;
+    double chi2_radius_tbin;
+    int ndof_radius_tbin;
+
+    double radius_phi_slope;
+    double radius_phi_intercept;
+    double chi2_radius_phi_line;
+    int ndof_radius_phi_line;
+
+    double circle_x0;
+    double circle_y0;
+    double circle_radius;
+    double chi2_radius_phi_circle;
+    int ndof_radius_phi_circle;
+
+    double chi2_radius_phi_sagitta;
+    int ndof_radius_phi_sagitta;
+
     // Blob indices used by this track.
     std::vector<unsigned int> blob_indices;
 
@@ -112,6 +152,7 @@ struct InModuleThreadData
   // General configuration
   double pedestal;
   int verbosity;
+  bool use_field_on_fit;
 
   // Noise rejection
   int noise_max_consecutive_timebins;
@@ -164,6 +205,10 @@ class InModuleTracks : public SubsysReco
   int End(PHCompositeNode*);
 
   void setMaxThreads(unsigned int n);
+
+
+  void setUseFieldOnFit(bool b) { m_useFieldOnFit = b; }
+
 
   void setPedestal(double p)
   {
@@ -235,6 +280,8 @@ class InModuleTracks : public SubsysReco
   int m_event;
   unsigned int m_maxThreads;
 
+  bool m_useFieldOnFit;
+
   // General configuration
   double m_pedestal;
 
@@ -287,6 +334,31 @@ class InModuleTracks : public SubsysReco
 
   std::vector<int> m_tree_ndof_pad;
   std::vector<int> m_tree_ndof_tbin;
+
+  std::vector<int> m_tree_has_sagitta_fit;
+  std::vector<double> m_tree_sagitta_S;
+  std::vector<double> m_tree_sagitta_x0;
+  std::vector<double> m_tree_sagitta_invR;
+  std::vector<double> m_tree_sagitta_theta;
+  std::vector<double> m_tree_sagitta_b;
+  std::vector<double> m_tree_chi2_radius_phi_sagitta;
+  std::vector<int> m_tree_ndof_radius_phi_sagitta;
+
+  std::vector<double> m_tree_radius_tbin_slope;
+  std::vector<double> m_tree_radius_tbin_intercept;
+  std::vector<double> m_tree_chi2_radius_tbin;
+  std::vector<int> m_tree_ndof_radius_tbin;
+
+  std::vector<double> m_tree_radius_phi_slope;
+  std::vector<double> m_tree_radius_phi_intercept;
+  std::vector<double> m_tree_chi2_radius_phi_line;
+  std::vector<int> m_tree_ndof_radius_phi_line;
+
+  std::vector<double> m_tree_circle_x0;
+  std::vector<double> m_tree_circle_y0;
+  std::vector<double> m_tree_circle_radius;
+  std::vector<double> m_tree_chi2_radius_phi_circle;
+  std::vector<int> m_tree_ndof_radius_phi_circle;
 
   // Flat per-hit content for TTree reading.
   // Hits are identified by their TrkrHitSetContainer keys only;
