@@ -12,7 +12,13 @@ pkginclude_HEADERS = \
   InModuleTrack.h \
   InModuleTrackv1.h \
   InModuleTrackContainer.h \
-  InModuleTrackContainerv1.h
+  InModuleTrackContainerv1.h \
+  FullTrack.h \
+  FullTrackv1.h \
+  FullTrackContainer.h \
+  FullTrackContainerv1.h \
+  FullTrackConnector.h \
+  TpcPadMap.h
 lib_LTLIBRARIES = \
   libInModuleTracks.la
 libInModuleTracks_la_SOURCES = \
@@ -21,10 +27,18 @@ libInModuleTracks_la_SOURCES = \
   InModuleTrackv1.cc \
   InModuleTrackContainer.cc \
   InModuleTrackContainerv1.cc \
+  FullTrack.cc \
+  FullTrackv1.cc \
+  FullTrackContainer.cc \
+  FullTrackContainerv1.cc \
+  FullTrackConnector.cc \
+  TpcPadMap.cc \
   InModuleTrackDict.cc
 libInModuleTracks_la_LIBADD = \
   -lphool \
   -lfun4all \
+  -lffamodules \
+  -lcdbobjects \
   -lg4eval \
   -lg4eval_io \
   -lphg4hit \
@@ -47,7 +61,7 @@ noinst_PROGRAMS = \
   testexternals
 testexternals_SOURCES = testexternals.cc
 testexternals_LDADD   = libInModuleTracks.la
-InModuleTrackDict.cc: InModuleTrack.h InModuleTrackv1.h InModuleTrackContainer.h InModuleTrackContainerv1.h LinkDef.h
+InModuleTrackDict.cc: InModuleTrack.h InModuleTrackv1.h InModuleTrackContainer.h InModuleTrackContainerv1.h FullTrack.h FullTrackv1.h FullTrackContainer.h FullTrackContainerv1.h LinkDef.h
 	rootcling -f $@ -c $(AM_CPPFLAGS) $^
 testexternals.cc:
 	echo "//*** this is a generated file. Do not commit, do not edit" > $@
