@@ -101,103 +101,7 @@ namespace
     ndof = static_cast<int>(x.size()) - 2;
     return true;
   }
-/*
-  bool weighted_circle_fit(const std::vector<double>& x,
-                         const std::vector<double>& y,
-                         const std::vector<double>& w,
-                         double& x0,
-                         double& y0,
-                         double& r0,
-                         double& chi2,
-                         int& ndof)
-  {
-    if (x.size() < 3 || x.size() != y.size() || x.size() != w.size())
-      return false;
 
-    double S = 0.0;
-    double Sx = 0.0, Sy = 0.0;
-    double Sxx = 0.0, Syy = 0.0, Sxy = 0.0;
-    double Sxz = 0.0, Syz = 0.0, Sz = 0.0;
-
-    for (unsigned int i = 0; i < x.size(); ++i)
-    {
-      const double wi = w[i] > 0.0 ? w[i] : 1.0;
-      const double xi = x[i];
-      const double yi = y[i];
-      const double zi = xi * xi + yi * yi;
-
-      S   += wi;
-      Sx  += wi * xi;
-      Sy  += wi * yi;
-      Sxx += wi * xi * xi;
-      Syy += wi * yi * yi;
-      Sxy += wi * xi * yi;
-      Sxz += wi * xi * zi;
-      Syz += wi * yi * zi;
-      Sz  += wi * zi;
-    }
-
-    // Solve:
-    // x^2 + y^2 + A*x + B*y + C = 0
-    // circle center = (-A/2, -B/2)
-    double M[3][4] =
-    {
-      {Sxx, Sxy, Sx,  -Sxz},
-      {Sxy, Syy, Sy,  -Syz},
-      {Sx,  Sy,  S,   -Sz}
-    };
-
-    for (int col = 0; col < 3; ++col)
-    {
-      int pivot = col;
-      for (int row = col + 1; row < 3; ++row)
-        if (std::fabs(M[row][col]) > std::fabs(M[pivot][col])) pivot = row;
-
-      if (std::fabs(M[pivot][col]) < 1.0e-20) return false;
-
-      if (pivot != col)
-      {
-        for (int k = col; k < 4; ++k)
-          std::swap(M[col][k], M[pivot][k]);
-      }
-
-      const double div = M[col][col];
-      for (int k = col; k < 4; ++k) M[col][k] /= div;
-
-      for (int row = 0; row < 3; ++row)
-      {
-        if (row == col) continue;
-        const double factor = M[row][col];
-        for (int k = col; k < 4; ++k)
-          M[row][k] -= factor * M[col][k];
-      }
-    }
-
-    const double A = M[0][3];
-    const double B = M[1][3];
-    const double C = M[2][3];
-
-    x0 = -0.5 * A;
-    y0 = -0.5 * B;
-
-    const double rr = x0 * x0 + y0 * y0 - C;
-    if (rr <= 0.0) return false;
-
-    r0 = std::sqrt(rr);
-
-    chi2 = 0.0;
-    for (unsigned int i = 0; i < x.size(); ++i)
-    {
-      const double wi = w[i] > 0.0 ? w[i] : 1.0;
-      const double dr = std::sqrt((x[i] - x0) * (x[i] - x0) +
-                                  (y[i] - y0) * (y[i] - y0)) - r0;
-      chi2 += wi * dr * dr;
-    }
-
-    ndof = static_cast<int>(x.size()) - 3;
-    return true;
-  }
-  */
 
   double sagitta_model_fit(const double xrot,
                            const double S,
@@ -842,60 +746,31 @@ namespace
   }
 
   // -------------------------------------------------------------------
-  // Geometry lookup tables (exact values from original)
+  // Local hardware -> geometry conversion.
+  //
+  // Keep exactly the same local convention as the original
+  // InModuleTracks.cc:
+  //
+  //   local_phi    = pad * phi_bin_width[region]
+  //   local_radius = module_radius[region][layer - 7 - 16*region]
+  //
+  // Do not apply sector offsets here.  In-module fits must be done in the
+  // local module coordinates only.
   // -------------------------------------------------------------------
-  static const int N_MODULES = 3;
-  static const int N_ROWS    = 16;
-
-  static const int Npads[N_MODULES] = { 94, 128, 192 };
-
-  static const double phi_bin_width[N_MODULES] =
+  double get_local_phi(const TpcPadMap* padMap,
+                       const unsigned int region,
+                       const unsigned int pad)
   {
-    0.0053073,
-    0.003959,
-    0.00265145
-  };
-
-  static const double module_radius[N_MODULES][N_ROWS] =
-  {
-    {
-      29.854978828112735, 31.869737083177956, 32.43665978627038,
-      33.00171100689825,  33.56863172731403,  34.133682357783,
-      34.70060474122243,  35.26565540941076,  35.83257683544541,
-      36.39762877363545,  36.964549975549694, 37.52960055896088,
-      38.09652180558749,  38.66157293473739,  39.228495272708216,
-      39.793545257944906
-    },
-    {
-      41.65920253621078,  42.67990048015332,  43.7005755287188,
-      44.7212729094545,   45.7419615067264,   46.76264656230158,
-      47.78333428983602,  48.80401878201343,  49.82471910526506,
-      50.8454060012135,   51.866093793785126, 52.88677964073831,
-      53.90746625152035,  54.92815969895385,  55.948864895868056,
-      56.9695394315422
-    },
-    {
-      58.910963349324035, 60.00800996331871,  61.10505851260341,
-      62.202104676954924, 63.29915863086735,  64.39619682986867,
-      65.49324606923312,  66.59029899562653,  67.68734047670296,
-      68.78439383353172,  69.88143340055497,  70.97848786511186,
-      72.07553264226554,  73.17257662017182,  74.2696338511705,
-      75.36667517343196
-    }
-  };
-
-  double get_local_phi(unsigned int region, unsigned int pad)
-  {
-    if (region >= static_cast<unsigned int>(N_MODULES)) return 0.0;
-    return static_cast<double>(pad) * phi_bin_width[region];
+    if (!padMap) return 0.0;
+    return padMap->get_local_phi(region, static_cast<double>(pad));
   }
 
-  double get_local_radius(unsigned int region, unsigned int layer)
+  double get_local_radius(const TpcPadMap* padMap,
+                          const unsigned int region,
+                          const unsigned int layer)
   {
-    if (region >= static_cast<unsigned int>(N_MODULES)) return 0.0;
-    const int ilayer = static_cast<int>(layer) - 7 - static_cast<int>(region) * 16;
-    if (ilayer < 0 || ilayer >= N_ROWS) return 0.0;
-    return module_radius[region][ilayer];
+    if (!padMap) return 0.0;
+    return padMap->get_local_radius(region, layer);
   }
 
   // -------------------------------------------------------------------
@@ -1047,8 +922,8 @@ namespace
         rh.pad          = pad;
         rh.tbin         = tbin;
         rh.adc          = static_cast<unsigned short>(fadc);
-        rh.local_phi    = get_local_phi(d->region, pad);
-        rh.local_radius = get_local_radius(d->region, rh.layer);
+        rh.local_phi    = get_local_phi(d->padMap, d->region, pad);
+        rh.local_radius = get_local_radius(d->padMap, d->region, rh.layer);
         d->raw_hits.push_back(rh);
       }
     }
@@ -1304,7 +1179,7 @@ InModuleThreadData::Track::Track()
     ndof_radius_phi_sagitta(0) {}
 
 InModuleThreadData::InModuleThreadData()
-  : region(0), sector(0), side(0), module_key(0), tGeometry(0),
+  : region(0), sector(0), side(0), module_key(0), tGeometry(0), padMap(0),
     pedestal(74.4), verbosity(0), use_field_on_fit(false),
     noise_max_consecutive_timebins(10), noise_keep_first_timebins(3), noise_adc_tolerance(5),
     blob_dt(2), blob_dp(2),
@@ -1552,6 +1427,7 @@ int InModuleTracks::process_event(PHCompositeNode*)
                                                     static_cast<uint8_t>(sector),
                                                     static_cast<uint8_t>(side));
         td.tGeometry          = m_tGeometry;
+        td.padMap             = &m_padMap;
         td.pedestal           = m_pedestal;
         td.verbosity          = Verbosity();
         td.use_field_on_fit   = m_useFieldOnFit;

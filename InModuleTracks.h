@@ -3,6 +3,8 @@
 #include <fun4all/SubsysReco.h>
 #include <trackbase/TrkrDefs.h>
 
+#include "TpcPadMap.h"
+
 #include <string>
 #include <vector>
 
@@ -148,6 +150,7 @@ struct InModuleThreadData
   TrkrDefs::hitsetkey module_key;
 
   ActsGeometry* tGeometry;
+  const TpcPadMap* padMap;
 
   // General configuration
   double pedestal;
@@ -275,6 +278,7 @@ class InModuleTracks : public SubsysReco
 
   TrkrHitSetContainer* m_hits;
   ActsGeometry* m_tGeometry;
+  TpcPadMap m_padMap;
 
   InModuleTrackContainer* m_inModuleTrackContainer;
   int m_event;
