@@ -14,4 +14,7 @@
 #pragma link C++ class FullTrackContainerv1+;
 
 #pragma link C++ class std::vector<std::pair<unsigned int, unsigned int>>+;
+#pragma link C++ class TpcPadMap+;
+#pragma link C++ class TpcPadMapv1+;
+
 #endif

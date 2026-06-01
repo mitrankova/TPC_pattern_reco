@@ -278,7 +278,7 @@ class InModuleTracks : public SubsysReco
 
   TrkrHitSetContainer* m_hits;
   ActsGeometry* m_tGeometry;
-  TpcPadMap m_padMap;
+  TpcPadMap* m_padMap;
 
   InModuleTrackContainer* m_inModuleTrackContainer;
   int m_event;

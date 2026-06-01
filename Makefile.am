@@ -18,7 +18,9 @@ pkginclude_HEADERS = \
   FullTrackContainer.h \
   FullTrackContainerv1.h \
   FullTrackConnector.h \
-  TpcPadMap.h
+  TpcPadMap.h \
+  TpcPadMapv1.h \
+  TpcPadMapBuilder.h
 lib_LTLIBRARIES = \
   libInModuleTracks.la
 libInModuleTracks_la_SOURCES = \
@@ -33,6 +35,8 @@ libInModuleTracks_la_SOURCES = \
   FullTrackContainerv1.cc \
   FullTrackConnector.cc \
   TpcPadMap.cc \
+  TpcPadMapv1.cc \
+  TpcPadMapBuilder.cc \
   InModuleTrackDict.cc
 libInModuleTracks_la_LIBADD = \
   -lphool \
@@ -61,7 +65,7 @@ noinst_PROGRAMS = \
   testexternals
 testexternals_SOURCES = testexternals.cc
 testexternals_LDADD   = libInModuleTracks.la
-InModuleTrackDict.cc: InModuleTrack.h InModuleTrackv1.h InModuleTrackContainer.h InModuleTrackContainerv1.h FullTrack.h FullTrackv1.h FullTrackContainer.h FullTrackContainerv1.h LinkDef.h
+InModuleTrackDict.cc: InModuleTrack.h InModuleTrackv1.h InModuleTrackContainer.h InModuleTrackContainerv1.h FullTrack.h FullTrackv1.h FullTrackContainer.h FullTrackContainerv1.h TpcPadMap.h TpcPadMapv1.h LinkDef.h
 	rootcling -f $@ -c $(AM_CPPFLAGS) $^
 testexternals.cc:
 	echo "//*** this is a generated file. Do not commit, do not edit" > $@

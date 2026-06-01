@@ -1201,6 +1201,7 @@ InModuleTracks::InModuleTracks(const std::string& name,
     m_tree(0),
     m_hits(0),
     m_tGeometry(0),
+    m_padMap(0),
     m_inModuleTrackContainer(0),
     m_event(0),
     m_maxThreads(72),
@@ -1329,6 +1330,19 @@ int InModuleTracks::getNodes(PHCompositeNode* topNode)
     return Fun4AllReturnCodes::ABORTRUN;
   }
 
+  m_padMap = findNode::getClass<TpcPadMap>(topNode, "TPC_PADMAP");
+  if (!m_padMap)
+  {
+    std::cerr << Name() << "::getNodes - missing TPC_PADMAP" << std::endl;
+    return Fun4AllReturnCodes::ABORTRUN;
+  }
+
+  if (!m_padMap->isValid())
+  {
+    std::cerr << Name() << "::getNodes - TPC_PADMAP is invalid" << std::endl;
+    return Fun4AllReturnCodes::ABORTRUN;
+  }
+
   return Fun4AllReturnCodes::EVENT_OK;
 }
 
@@ -1427,7 +1441,7 @@ int InModuleTracks::process_event(PHCompositeNode*)
                                                     static_cast<uint8_t>(sector),
                                                     static_cast<uint8_t>(side));
         td.tGeometry          = m_tGeometry;
-        td.padMap             = &m_padMap;
+        td.padMap             = m_padMap;
         td.pedestal           = m_pedestal;
         td.verbosity          = Verbosity();
         td.use_field_on_fit   = m_useFieldOnFit;

@@ -3,7 +3,7 @@
 #include <fun4all/SubsysReco.h>
 #include <trackbase/TrkrDefs.h>
 
-#include "TpcPadMap.h"
+class TpcPadMap;
 
 #include <string>
 #include <vector>
@@ -33,14 +33,14 @@ class FullTrackConnector : public SubsysReco
   // Same idea as InModuleTracks::setConnectMaxLayerGap.
   void setConnectMaxLayerGap(unsigned int n) { m_connectMaxLayerGap = n; }
 
-  // Connection window in local pad-phi [rad] and tbin.
+  // Connection window in global phi [rad] and tbin.
   void setConnectWindow(double dphi, double dtbin)
   {
     m_connect_dphi = dphi;
     m_connect_dtbin = dtbin;
   }
 
-  // Connection slope window in local pad-phi/radius and tbin/radius.
+  // Connection slope window in global-phi/radius and tbin/radius.
   void setConnectSlopeWindow(double dtbin_slope, double dphi_slope)
   {
     m_connect_dtbin_slope = dtbin_slope;
@@ -64,7 +64,7 @@ class FullTrackConnector : public SubsysReco
     unsigned int nblobs;
     unsigned int nrawhits;
 
-    // Fit of this source piece in local pad-phi/timebin vs local radius.
+    // Fit of this source piece in global phi/timebin vs radius.
     double phi_slope;
     double phi_intercept;
     double tbin_slope;
@@ -137,7 +137,7 @@ class FullTrackConnector : public SubsysReco
 
   int m_event;
 
-  TpcPadMap m_padMap;
+  TpcPadMap* m_padMap;
 
   unsigned int m_connectMaxLayerGap;
   double m_connect_dphi;

@@ -4,6 +4,7 @@
 #include "FullTrackv1.h"
 #include "FullTrackContainer.h"
 #include "FullTrackContainerv1.h"
+#include "TpcPadMap.h"
 
 #include "InModuleTrack.h"
 #include "InModuleTrackContainer.h"
@@ -86,7 +87,22 @@ namespace
       return pa.source_track_id < pb.source_track_id;
     }
   };
+
+  double unwrap_phi_to_reference(double phi, const double ref)
+  {
+    while (phi - ref > M_PI)  phi -= 2.0 * M_PI;
+    while (phi - ref < -M_PI) phi += 2.0 * M_PI;
+    return phi;
+  }
+
+  double wrap_to_pi(double phi)
+  {
+    while (phi > M_PI)  phi -= 2.0 * M_PI;
+    while (phi <= -M_PI) phi += 2.0 * M_PI;
+    return phi;
+  }
 }
+
 
 FullTrackConnector::Piece::Piece() :
   source_index(0),
@@ -130,22 +146,22 @@ FullTrackConnector::Candidate::Candidate() :
 }
 
 FullTrackConnector::FullTrackConnector(const std::string& name,
-                                       const std::string& filename) :
-  SubsysReco(name),
-  m_outputFileName(filename),
-  m_inputNodeName("INMODULETRACKS"),
-  m_outputNodeName("FULLTRACKS"),
-  m_outputFile(nullptr),
-  m_tree(nullptr),
-  m_inModuleTrackContainer(nullptr),
-  m_fullTrackContainer(nullptr),
-  m_event(0),
-  m_connectMaxLayerGap(2),
-  m_connect_dphi(0.030),
-  m_connect_dtbin(8.0),
-  m_connect_dphi_slope(0.010),
-  m_connect_dtbin_slope(3.0),
-  m_tree_event(0)
+                                       const std::string& filename)
+  : SubsysReco(name)
+  , m_outputFileName(filename)
+  , m_inputNodeName("INMODULETRACKS")
+  , m_outputNodeName("FULLTRACKS")
+  , m_outputFile(nullptr)
+  , m_tree(nullptr)
+  , m_inModuleTrackContainer(nullptr)
+  , m_fullTrackContainer(nullptr)
+  , m_event(0)
+  , m_padMap(nullptr)
+  , m_connectMaxLayerGap(1)
+  , m_connect_dphi(0.03)
+  , m_connect_dtbin(8.0)
+  , m_connect_dphi_slope(0.01)
+  , m_connect_dtbin_slope(2.0)
 {
 }
 
@@ -207,6 +223,23 @@ int FullTrackConnector::InitRun(PHCompositeNode* topNode)
   if (getNodes(topNode) != Fun4AllReturnCodes::EVENT_OK) return Fun4AllReturnCodes::ABORTRUN;
   if (createNodes(topNode) != Fun4AllReturnCodes::EVENT_OK) return Fun4AllReturnCodes::ABORTRUN;
 
+  if (!m_padMap)
+  {
+    std::cerr << Name() << "::InitRun - missing TPC_PADMAP node" << std::endl;
+    return Fun4AllReturnCodes::ABORTRUN;
+  }
+
+  if (!m_padMap->isValid())
+  {
+    std::cerr << Name() << "::InitRun - TPC_PADMAP node is invalid" << std::endl;
+    return Fun4AllReturnCodes::ABORTRUN;
+  }
+
+  //if (Verbosity() > 0)
+ // {
+    m_padMap->print_sector_edges();
+ // }
+
   m_event = 0;
   return Fun4AllReturnCodes::EVENT_OK;
 }
@@ -232,6 +265,14 @@ int FullTrackConnector::getNodes(PHCompositeNode* topNode)
     std::cerr << Name() << "::getNodes - missing " << m_inputNodeName << std::endl;
     return Fun4AllReturnCodes::ABORTRUN;
   }
+
+  m_padMap = findNode::getClass<TpcPadMap>(topNode, "TPC_PADMAP");
+  if (!m_padMap)
+  {
+    std::cerr << Name() << "::getNodes - missing TPC_PADMAP" << std::endl;
+    return Fun4AllReturnCodes::ABORTRUN;
+  }
+
   return Fun4AllReturnCodes::EVENT_OK;
 }
 
@@ -315,18 +356,25 @@ bool FullTrackConnector::make_piece(unsigned int source_index, Piece& p) const
 
   const double l0 = static_cast<double>(p.first_layer);
   const double l1 = static_cast<double>(p.last_layer);
-  const double r0 = m_padMap.get_local_radius(p.region, p.first_layer);
-  const double r1 = m_padMap.get_local_radius(p.region, p.last_layer);
+  const double r0 = m_padMap->get_local_radius(p.region, p.first_layer);
+  const double r1 = m_padMap->get_local_radius(p.region, p.last_layer);
   if (r0 <= 0.0 || r1 <= 0.0) return false;
 
   const double pad0 = trk->get_pad_slope() * l0 + trk->get_pad_intercept();
   const double pad1 = trk->get_pad_slope() * l1 + trk->get_pad_intercept();
 
-  // FullTrackConnector works in local coordinates:
-  //   x = local radius [cm], y = local pad-phi [rad], z = timebin.
-  // Do not apply sector/global phi offsets here.
-  const double phi0 = m_padMap.get_local_phi(p.region, pad0);
-  const double phi1 = m_padMap.get_local_phi(p.region, pad1);
+  // FullTrackConnector works with global phi for the full-track fit:
+  //   x = radius [cm], y = global phi [rad], z = timebin.
+  // The phi endpoints are unwrapped only internally so the line fit is continuous
+  // across the +/- pi boundary.
+  double phi0 = wrap_to_pi(m_padMap->get_global_phi(static_cast<unsigned int>(p.side),
+                                                    p.region, pad0));
+
+  double phi1 = wrap_to_pi(m_padMap->get_global_phi(static_cast<unsigned int>(p.side),
+                                                    p.region, pad1));
+
+  // unwrap endpoint so the piece line does not jump at +/- pi
+  phi1 = unwrap_phi_to_reference(phi1, phi0);
 
   const double tbin0 = trk->get_tbin_slope() * l0 + trk->get_tbin_intercept();
   const double tbin1 = trk->get_tbin_slope() * l1 + trk->get_tbin_intercept();
@@ -385,12 +433,18 @@ bool FullTrackConnector::refit_candidate(const std::vector<Piece>& pieces,
     const Piece& p = pieces[piece_indices[ii]];
     const double wt = (p.nrawhits > 0) ? static_cast<double>(p.nrawhits) : 1.0;
 
-    const double r0 = m_padMap.get_local_radius(p.region, p.first_layer);
-    const double r1 = m_padMap.get_local_radius(p.region, p.last_layer);
+    const double r0 = m_padMap->get_local_radius(p.region, p.first_layer);
+    const double r1 = m_padMap->get_local_radius(p.region, p.last_layer);
     if (r0 <= 0.0 || r1 <= 0.0) return false;
 
-    const double phi0 = p.phi_slope * r0 + p.phi_intercept;
-    const double phi1 = p.phi_slope * r1 + p.phi_intercept;
+    double phi0 = p.phi_slope * r0 + p.phi_intercept;
+    double phi1 = p.phi_slope * r1 + p.phi_intercept;
+
+    if (!phi.empty())
+    {
+      phi0 = unwrap_phi_to_reference(phi0, phi.back());
+    }
+    phi1 = unwrap_phi_to_reference(phi1, phi0);
 
     x.push_back(r0);
     phi.push_back(phi0);
@@ -465,15 +519,16 @@ bool FullTrackConnector::candidates_can_connect(const Candidate& a,
   const unsigned int gap = b.first_layer - a.last_layer - 1;
   if (gap > m_connectMaxLayerGap) return false;
 
-  const double ra = m_padMap.get_local_radius(a.last_region, a.last_layer);
-  const double rb = m_padMap.get_local_radius(b.region, b.first_layer);
+  const double ra = m_padMap->get_local_radius(a.last_region, a.last_layer);
+  const double rb = m_padMap->get_local_radius(b.region, b.first_layer);
   if (ra <= 0.0 || rb <= 0.0) return false;
 
   const double rmatch = 0.5 * (ra + rb);
 
   const double phi_a = a.phi_slope * rmatch + a.phi_intercept;
-  const double phi_b = b.phi_slope * rmatch + b.phi_intercept;
-  b_phi_intercept_shifted = b.phi_intercept;
+  const double phi_b_raw = b.phi_slope * rmatch + b.phi_intercept;
+  const double phi_b = unwrap_phi_to_reference(phi_b_raw, phi_a);
+  b_phi_intercept_shifted = b.phi_intercept + (phi_b - phi_b_raw);
 
   const double tbin_a = a.tbin_slope * rmatch + a.tbin_intercept;
   const double tbin_b = b.tbin_slope * rmatch + b.tbin_intercept;
