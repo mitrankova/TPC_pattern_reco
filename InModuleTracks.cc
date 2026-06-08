@@ -1,4 +1,5 @@
 #include "InModuleTracks.h"
+#include "Fitter.h"
 
 #include <fun4all/Fun4AllReturnCodes.h>
 
@@ -21,7 +22,6 @@
 #include <trackbase/TrkrHit.h>
 #include <trackbase/TrkrHitSet.h>
 #include <trackbase/TrkrHitSetContainer.h>
-#include <trackbase/ActsGeometry.h>
 
 #include <pthread.h>
 
@@ -50,307 +50,7 @@ namespace
     }
   };
 
-  double adc_weight(double adc, double maxadc, double power, double floor_frac)
-  {
-    if (adc <= 0.0) return 0.0;
-    if (maxadc <= 0.0) return 1.0;
-
-    double w = std::pow(adc / maxadc, power);
-    const double floor_w = floor_frac;
-    if (w < floor_w) w = floor_w;
-    return w;
-  }
-
-  bool weighted_line_fit(const std::vector<double>& x,
-                         const std::vector<double>& y,
-                         const std::vector<double>& w,
-                         double& m,
-                         double& b,
-                         double& chi2,
-                         int& ndof)
-  {
-    if (x.size() < 2 || x.size() != y.size() || x.size() != w.size())
-      return false;
-
-    double S = 0.0, Sx = 0.0, Sy = 0.0, Sxx = 0.0, Sxy = 0.0;
-
-    for (unsigned int i = 0; i < x.size(); ++i)
-    {
-      const double wi = w[i] > 0.0 ? w[i] : 1.0;
-      S   += wi;
-      Sx  += wi * x[i];
-      Sy  += wi * y[i];
-      Sxx += wi * x[i] * x[i];
-      Sxy += wi * x[i] * y[i];
-    }
-
-    const double den = S * Sxx - Sx * Sx;
-    if (std::fabs(den) < 1.0e-12) return false;
-
-    m = (S * Sxy - Sx * Sy) / den;
-    b = (Sy - m * Sx) / S;
-
-    chi2 = 0.0;
-    for (unsigned int i = 0; i < x.size(); ++i)
-    {
-      const double wi = w[i] > 0.0 ? w[i] : 1.0;
-      const double r = y[i] - (m * x[i] + b);
-      chi2 += wi * r * r;
-    }
-
-    ndof = static_cast<int>(x.size()) - 2;
-    return true;
-  }
-
-
-  double sagitta_model_fit(const double xrot,
-                           const double S,
-                           const double x0,
-                           const double invR)
-  {
-    const double dx = xrot - x0;
-    const double invR2 = invR * invR;
-    const double dx2 = dx * dx;
-
-    // Same truncated expansion as the Python notebook:
-    // sagitta = S - 1/2 invR dx^2 - 1/8 invR^3 dx^4 - 1/16 invR^5 dx^6
-    return S
-      - 0.5 * invR * dx2
-      - 0.125 * invR * invR2 * dx2 * dx2
-      - 0.0625 * invR * invR2 * invR2 * dx2 * dx2 * dx2;
-  }
-
-  bool solve_3x3(double A[3][3], double b[3], double x[3])
-  {
-    double M[3][4] =
-    {
-      {A[0][0], A[0][1], A[0][2], b[0]},
-      {A[1][0], A[1][1], A[1][2], b[1]},
-      {A[2][0], A[2][1], A[2][2], b[2]}
-    };
-
-    for (int col = 0; col < 3; ++col)
-    {
-      int pivot = col;
-      for (int row = col + 1; row < 3; ++row)
-        if (std::fabs(M[row][col]) > std::fabs(M[pivot][col])) pivot = row;
-
-      if (std::fabs(M[pivot][col]) < 1.0e-20) return false;
-
-      if (pivot != col)
-      {
-        for (int k = col; k < 4; ++k)
-          std::swap(M[col][k], M[pivot][k]);
-      }
-
-      const double div = M[col][col];
-      for (int k = col; k < 4; ++k) M[col][k] /= div;
-
-      for (int row = 0; row < 3; ++row)
-      {
-        if (row == col) continue;
-        const double factor = M[row][col];
-        for (int k = col; k < 4; ++k)
-          M[row][k] -= factor * M[col][k];
-      }
-    }
-
-    x[0] = M[0][3];
-    x[1] = M[1][3];
-    x[2] = M[2][3];
-    return true;
-  }
-
-  bool weighted_sagitta_fit(const std::vector<double>& local_x,
-                            const std::vector<double>& local_y,
-                            const std::vector<double>& w,
-                            double& S,
-                            double& x0,
-                            double& invR,
-                            double& theta,
-                            double& bline,
-                            double& chi2,
-                            int& ndof)
-  {
-    if (local_x.size() < 3 ||
-        local_x.size() != local_y.size() ||
-        local_x.size() != w.size())
-      return false;
-
-    // First reproduce the notebook convention: fit a straight line in the
-    // local x-y plane and rotate/shift so that this line is approximately
-    // horizontal.  The sagitta is then fitted in (x_rot, y_rot).
-    double mline = 0.0;
-    double line_chi2 = 0.0;
-    int line_ndof = 0;
-    if (!weighted_line_fit(local_x, local_y, w, mline, bline, line_chi2, line_ndof))
-      return false;
-
-    theta = std::atan(mline);
-    const double c = std::cos(theta);
-    const double s = std::sin(theta);
-
-    std::vector<double> xrot;
-    std::vector<double> yrot;
-    xrot.reserve(local_x.size());
-    yrot.reserve(local_x.size());
-
-    double sw = 0.0;
-    double sx = 0.0;
-    double sy = 0.0;
-
-    for (unsigned int i = 0; i < local_x.size(); ++i)
-    {
-      const double wi = w[i] > 0.0 ? w[i] : 1.0;
-      const double yy = local_y[i] - bline;
-      const double xr =  c * local_x[i] + s * yy;
-      const double yr = -s * local_x[i] + c * yy;
-
-      xrot.push_back(xr);
-      yrot.push_back(yr);
-
-      sw += wi;
-      sx += wi * xr;
-      sy += wi * yr;
-    }
-
-    if (sw <= 0.0) return false;
-
-    x0 = sx / sw;
-    S  = sy / sw;
-
-    // Initial curvature from a linear fit y_rot = S + q*(x_rot-x0)^2.
-    std::vector<double> dx2;
-    dx2.reserve(xrot.size());
-    for (unsigned int i = 0; i < xrot.size(); ++i)
-    {
-      const double dx = xrot[i] - x0;
-      dx2.push_back(dx * dx);
-    }
-
-    double q = 0.0;
-    double qS = 0.0;
-    double qchi2 = 0.0;
-    int qndof = 0;
-    if (weighted_line_fit(dx2, yrot, w, q, qS, qchi2, qndof))
-    {
-      S = qS;
-      invR = -2.0 * q;
-    }
-    else
-    {
-      invR = 0.0;
-    }
-
-    // Limit pathological starting values.  TPC local distances are in cm;
-    // values much above this correspond to extremely tight, unphysical arcs.
-    if (invR >  1.0) invR =  1.0;
-    if (invR < -1.0) invR = -1.0;
-
-    chi2 = 0.0;
-    for (unsigned int i = 0; i < xrot.size(); ++i)
-    {
-      const double wi = w[i] > 0.0 ? w[i] : 1.0;
-      const double r = yrot[i] - sagitta_model_fit(xrot[i], S, x0, invR);
-      chi2 += wi * r * r;
-    }
-
-    // Small damped Gauss-Newton refinement of (S, x0, invR).
-    double lambda = 1.0e-6;
-    for (unsigned int iter = 0; iter < 25; ++iter)
-    {
-      double A[3][3] = {{0.0, 0.0, 0.0},
-                        {0.0, 0.0, 0.0},
-                        {0.0, 0.0, 0.0}};
-      double bvec[3] = {0.0, 0.0, 0.0};
-
-      for (unsigned int i = 0; i < xrot.size(); ++i)
-      {
-        const double wi = w[i] > 0.0 ? w[i] : 1.0;
-        const double dx = xrot[i] - x0;
-        const double dx2v = dx * dx;
-        const double dx3 = dx2v * dx;
-        const double dx4 = dx2v * dx2v;
-        const double dx5 = dx4 * dx;
-        const double dx6 = dx4 * dx2v;
-
-        const double invR2 = invR * invR;
-        const double invR3 = invR2 * invR;
-        const double invR4 = invR2 * invR2;
-        const double invR5 = invR4 * invR;
-
-        const double f = S
-          - 0.5 * invR * dx2v
-          - 0.125 * invR3 * dx4
-          - 0.0625 * invR5 * dx6;
-
-        const double resid = yrot[i] - f;
-
-        double J[3];
-        J[0] = 1.0;
-        J[1] = invR * dx + 0.5 * invR3 * dx3 + 0.375 * invR5 * dx5;
-        J[2] = -0.5 * dx2v - 0.375 * invR2 * dx4 - 0.3125 * invR4 * dx6;
-
-        for (int a = 0; a < 3; ++a)
-        {
-          bvec[a] += wi * J[a] * resid;
-          for (int b = 0; b < 3; ++b)
-            A[a][b] += wi * J[a] * J[b];
-        }
-      }
-
-      A[0][0] += lambda;
-      A[1][1] += lambda;
-      A[2][2] += lambda;
-
-      double delta[3] = {0.0, 0.0, 0.0};
-      if (!solve_3x3(A, bvec, delta)) break;
-
-      // Guard against numerical jumps on nearly straight tracks.
-      if (delta[0] >  10.0) delta[0] =  10.0;
-      if (delta[0] < -10.0) delta[0] = -10.0;
-      if (delta[1] >  10.0) delta[1] =  10.0;
-      if (delta[1] < -10.0) delta[1] = -10.0;
-      if (delta[2] >   0.1) delta[2] =   0.1;
-      if (delta[2] <  -0.1) delta[2] =  -0.1;
-
-      const double S_new = S + delta[0];
-      const double x0_new = x0 + delta[1];
-      double invR_new = invR + delta[2];
-
-      if (invR_new >  1.0) invR_new =  1.0;
-      if (invR_new < -1.0) invR_new = -1.0;
-
-      double chi2_new = 0.0;
-      for (unsigned int i = 0; i < xrot.size(); ++i)
-      {
-        const double wi = w[i] > 0.0 ? w[i] : 1.0;
-        const double r = yrot[i] - sagitta_model_fit(xrot[i], S_new, x0_new, invR_new);
-        chi2_new += wi * r * r;
-      }
-
-      if (chi2_new <= chi2)
-      {
-        S = S_new;
-        x0 = x0_new;
-        invR = invR_new;
-        chi2 = chi2_new;
-        lambda *= 0.3;
-
-        if (std::fabs(delta[0]) < 1.0e-6 &&
-            std::fabs(delta[1]) < 1.0e-6 &&
-            std::fabs(delta[2]) < 1.0e-8)
-          break;
-      }
-      else
-      {
-        lambda *= 10.0;
-      }
-    }
-
-    ndof = static_cast<int>(local_x.size()) - 3;
-    return true;
-  }
+  // Generic fitting functions live in Fitter.{h,cc}.
 
 
   bool fit_track_from_blobs(const std::vector<InModuleThreadData::Blob>& blobs,
@@ -379,7 +79,7 @@ namespace
       x.push_back(static_cast<double>(bl.layer));
       pad.push_back(bl.pad);
       tbin.push_back(bl.tbin);
-      w.push_back(adc_weight(bl.adc, maxadc, weight_power, floor_frac));
+      w.push_back(Fitter::adcWeight(bl.adc, maxadc, weight_power, floor_frac));
 
       if (bl.layer < first_layer) first_layer = bl.layer;
       if (bl.layer > last_layer)  last_layer  = bl.layer;
@@ -389,8 +89,8 @@ namespace
     double mt = 0.0, bt = 0.0, ct = 0.0;
     int ndp = 0, ndt = 0;
 
-    if (!weighted_line_fit(x, pad,  w, mp, bp, cp, ndp)) return false;
-    if (!weighted_line_fit(x, tbin, w, mt, bt, ct, ndt)) return false;
+    if (!Fitter::weightedLineFit(x, pad,  w, mp, bp, cp, ndp)) return false;
+    if (!Fitter::weightedLineFit(x, tbin, w, mt, bt, ct, ndt)) return false;
 
     trk.first_layer    = first_layer;
     trk.last_layer     = last_layer;
@@ -400,10 +100,6 @@ namespace
     trk.pad_intercept  = bp;
     trk.tbin_slope     = mt;
     trk.tbin_intercept = bt;
-    trk.chi2_pad       = cp;
-    trk.chi2_tbin      = ct;
-    trk.ndof_pad       = ndp;
-    trk.ndof_tbin      = ndt;
     trk.blob_indices   = idx;
     trk.raw_hit_indices.clear();
 
@@ -423,175 +119,34 @@ namespace
     }
   }
 
-  bool robust_fit_track_from_raw_hits(const std::vector<InModuleThreadData::RawHit>& raw_hits,
-                                      const std::vector<InModuleThreadData::Blob>& blobs,
-                                      const std::vector<unsigned int>& blob_idx,
-                                      double weight_power,
-                                      double floor_frac,
-                                      bool use_field_on_fit,
-                                      InModuleThreadData::Track& trk)
+  bool make_track_from_blob_chain(const std::vector<InModuleThreadData::RawHit>& raw_hits,
+                                  const std::vector<InModuleThreadData::Blob>& blobs,
+                                  const std::vector<unsigned int>& blob_idx,
+                                  double weight_power,
+                                  double floor_frac,
+                                  InModuleThreadData::Track& trk)
   {
+    if (!fit_track_from_blobs(blobs, blob_idx, weight_power, floor_frac, trk)) return false;
+
     std::vector<unsigned int> raw_idx;
     collect_raw_indices_from_blob_chain(blobs, blob_idx, raw_idx);
-    if (raw_idx.size() < 2) return false;
+    if (raw_idx.empty()) return false;
 
-    double maxadc = 0.0;
-    unsigned int first_layer = 999999, last_layer = 0;
-
+    unsigned int first_layer = 999999;
+    unsigned int last_layer = 0;
     for (unsigned int i = 0; i < raw_idx.size(); ++i)
     {
       const InModuleThreadData::RawHit& rh = raw_hits[raw_idx[i]];
-      if (rh.adc > maxadc) maxadc = rh.adc;
       if (rh.layer < first_layer) first_layer = rh.layer;
       if (rh.layer > last_layer)  last_layer  = rh.layer;
     }
 
-    std::vector<double> x, pad, tbin, base_w, w;
-    x.reserve(raw_idx.size());
-    pad.reserve(raw_idx.size());
-    tbin.reserve(raw_idx.size());
-    base_w.reserve(raw_idx.size());
-    w.reserve(raw_idx.size());
-
-    std::vector<double> radius;
-    std::vector<double> phi;
-    std::vector<double> local_x;
-    std::vector<double> local_y;
-
-    radius.reserve(raw_idx.size());
-    phi.reserve(raw_idx.size());
-    local_x.reserve(raw_idx.size());
-    local_y.reserve(raw_idx.size());
-
-    for (unsigned int i = 0; i < raw_idx.size(); ++i)
-    {
-      const InModuleThreadData::RawHit& rh = raw_hits[raw_idx[i]];
-      x.push_back(static_cast<double>(rh.layer));
-      pad.push_back(static_cast<double>(rh.pad));
-      tbin.push_back(static_cast<double>(rh.tbin));
-      base_w.push_back(adc_weight(static_cast<double>(rh.adc), maxadc,
-                                  weight_power, floor_frac));
-      w.push_back(base_w.back());
-
-      const double r  = rh.local_radius;
-      const double ph = rh.local_phi;
-
-      radius.push_back(r);
-      phi.push_back(ph);
-
-      local_x.push_back(r * std::cos(ph));
-      local_y.push_back(r * std::sin(ph));
-    }
-
-    double mp = 0.0, bp = 0.0, cp = 0.0;
-    double mt = 0.0, bt = 0.0, ct = 0.0;
-    int ndp = 0, ndt = 0;
-
-    const double huber_c = 2.5;
-    for (unsigned int iter = 0; iter < 5; ++iter)
-    {
-      if (!weighted_line_fit(x, pad,  w, mp, bp, cp, ndp)) return false;
-      if (!weighted_line_fit(x, tbin, w, mt, bt, ct, ndt)) return false;
-
-      double sw = 0.0, sp2 = 0.0, st2 = 0.0;
-      for (unsigned int i = 0; i < x.size(); ++i)
-      {
-        const double rp = pad[i]  - (mp * x[i] + bp);
-        const double rt = tbin[i] - (mt * x[i] + bt);
-        sw  += base_w[i];
-        sp2 += base_w[i] * rp * rp;
-        st2 += base_w[i] * rt * rt;
-      }
-
-      double scale_p = 1.0, scale_t = 1.0;
-      if (sw > 0.0)
-      {
-        scale_p = std::sqrt(sp2 / sw);
-        scale_t = std::sqrt(st2 / sw);
-      }
-      if (scale_p < 1.0) scale_p = 1.0;
-      if (scale_t < 1.0) scale_t = 1.0;
-
-      for (unsigned int i = 0; i < x.size(); ++i)
-      {
-        const double rp = pad[i]  - (mp * x[i] + bp);
-        const double rt = tbin[i] - (mt * x[i] + bt);
-        const double r = std::sqrt((rp / scale_p) * (rp / scale_p) +
-                                   (rt / scale_t) * (rt / scale_t));
-        double robust = 1.0;
-        if (r > huber_c) robust = huber_c / r;
-        w[i] = base_w[i] * robust;
-      }
-    }
-
-    if (!weighted_line_fit(x, pad,  w, mp, bp, cp, ndp)) return false;
-    if (!weighted_line_fit(x, tbin, w, mt, bt, ct, ndt)) return false;
-
-    trk.first_layer    = first_layer;
-    trk.last_layer     = last_layer;
-    trk.nblobs         = static_cast<unsigned int>(blob_idx.size());
-    trk.nrawhits       = static_cast<unsigned int>(raw_idx.size());
-    trk.pad_slope      = mp;
-    trk.pad_intercept  = bp;
-    trk.tbin_slope     = mt;
-    trk.tbin_intercept = bt;
-    trk.chi2_pad       = cp;
-    trk.chi2_tbin      = ct;
-    trk.ndof_pad       = ndp;
-    trk.ndof_tbin      = ndt;
-    trk.blob_indices   = blob_idx;
+    trk.first_layer = first_layer;
+    trk.last_layer = last_layer;
+    trk.nblobs = static_cast<unsigned int>(blob_idx.size());
+    trk.nrawhits = static_cast<unsigned int>(raw_idx.size());
+    trk.blob_indices = blob_idx;
     trk.raw_hit_indices = raw_idx;
-    double mrt = 0.0, brt = 0.0, crt = 0.0;
-    int ndrt = 0;
-
-    if (weighted_line_fit(radius, tbin, w, mrt, brt, crt, ndrt))
-    {
-      trk.has_local_line_fit = true;
-      trk.radius_tbin_slope = mrt;
-      trk.radius_tbin_intercept = brt;
-      trk.chi2_radius_tbin = crt;
-      trk.ndof_radius_tbin = ndrt;
-    }
-    if (!use_field_on_fit)
-    {
-      double mrp = 0.0, brp = 0.0, crp = 0.0;
-      int ndrp = 0;
-
-      if (weighted_line_fit(radius, phi, w, mrp, brp, crp, ndrp))
-      {
-        trk.has_radius_phi_line_fit = true;
-        trk.radius_phi_slope = mrp;
-        trk.radius_phi_intercept = brp;
-        trk.chi2_radius_phi_line = crp;
-        trk.ndof_radius_phi_line = ndrp;
-      }
-    }
-    if (use_field_on_fit)
-    {
-      double sagS = 0.0;
-      double sagx0 = 0.0;
-      double sagInvR = 0.0;
-      double sagTheta = 0.0;
-      double sagB = 0.0;
-      double sagChi2 = 0.0;
-      int sagNdof = 0;
-
-      // Sagitta fit requested in the (local radius, local phi) plane.
-      // The fitter internally rotates this 2D plane to remove the linear trend.
-      if (weighted_sagitta_fit(radius, phi, w,
-                               sagS, sagx0, sagInvR, sagTheta, sagB,
-                               sagChi2, sagNdof))
-      {
-        trk.has_sagitta_fit = true;
-        trk.sagitta_S = sagS;
-        trk.sagitta_x0 = sagx0;
-        trk.sagitta_invR = sagInvR;
-        trk.sagitta_theta = sagTheta;
-        trk.sagitta_b = sagB;
-        trk.chi2_radius_phi_sagitta = sagChi2;
-        trk.ndof_radius_phi_sagitta = sagNdof;
-      }
-    }
 
     return true;
   }
@@ -714,11 +269,10 @@ namespace
           append_unique_blob_indices(current.blob_indices, pieces[best_j].blob_indices);
 
           InModuleThreadData::Track refit;
-          if (robust_fit_track_from_raw_hits(d->raw_hits, d->blobs,
+          if (make_track_from_blob_chain(d->raw_hits, d->blobs,
                                    current.blob_indices,
                                    d->weight_power,
                                    d->adc_weight_floor_frac,
-                                   d->use_field_on_fit,
                                    refit))
           {
             current  = refit;
@@ -743,34 +297,6 @@ namespace
     }
 
     d->tracks.swap(output);
-  }
-
-  // -------------------------------------------------------------------
-  // Local hardware -> geometry conversion.
-  //
-  // Keep exactly the same local convention as the original
-  // InModuleTracks.cc:
-  //
-  //   local_phi    = pad * phi_bin_width[region]
-  //   local_radius = module_radius[region][layer - 7 - 16*region]
-  //
-  // Do not apply sector offsets here.  In-module fits must be done in the
-  // local module coordinates only.
-  // -------------------------------------------------------------------
-  double get_local_phi(const TpcPadMap* padMap,
-                       const unsigned int region,
-                       const unsigned int pad)
-  {
-    if (!padMap) return 0.0;
-    return padMap->get_local_phi(region, static_cast<double>(pad));
-  }
-
-  double get_local_radius(const TpcPadMap* padMap,
-                          const unsigned int region,
-                          const unsigned int layer)
-  {
-    if (!padMap) return 0.0;
-    return padMap->get_local_radius(region, layer);
   }
 
   // -------------------------------------------------------------------
@@ -922,8 +448,6 @@ namespace
         rh.pad          = pad;
         rh.tbin         = tbin;
         rh.adc          = static_cast<unsigned short>(fadc);
-        rh.local_phi    = get_local_phi(d->padMap, d->region, pad);
-        rh.local_radius = get_local_radius(d->padMap, d->region, rh.layer);
         d->raw_hits.push_back(rh);
       }
     }
@@ -1094,10 +618,9 @@ namespace
 
       InModuleThreadData::Track trk;
       trk.track_id = tid;
-      if (robust_fit_track_from_raw_hits(d->raw_hits, d->blobs, chain,
+      if (make_track_from_blob_chain(d->raw_hits, d->blobs, chain,
                                         d->weight_power,
                                         d->adc_weight_floor_frac,
-                                        d->use_field_on_fit,
                                         trk))
       {
         trk.track_id = tid;
@@ -1140,8 +663,7 @@ InModuleThreadData::LayerHitSet::LayerHitSet()
 
 InModuleThreadData::RawHit::RawHit()
   : layer(0), hitsetkey(0), hitkey(0),
-    pad(0), tbin(0), adc(0),
-    local_phi(0.0), local_radius(0.0) {}
+    pad(0), tbin(0), adc(0) {}
 
 InModuleThreadData::Blob::Blob()
   : layer(0), pad(0.0), tbin(0.0), adc(0.0), nhits(0), used(0) {}
@@ -1150,37 +672,11 @@ InModuleThreadData::Track::Track()
   : track_id(0), first_layer(0), last_layer(0),
     nblobs(0), nrawhits(0),
     pad_slope(0.0), pad_intercept(0.0),
-    tbin_slope(0.0), tbin_intercept(0.0),
-    chi2_pad(0.0), chi2_tbin(0.0),
-    ndof_pad(0), ndof_tbin(0),
-    has_local_line_fit(false),
-    has_radius_phi_line_fit(false),
-    has_radius_phi_circle_fit(false),
-    has_sagitta_fit(false),
-    sagitta_S(0.0),
-    sagitta_x0(0.0),
-    sagitta_invR(0.0),
-    sagitta_theta(0.0),
-    sagitta_b(0.0),
-    radius_tbin_slope(0.0),
-    radius_tbin_intercept(0.0),
-    chi2_radius_tbin(0.0),
-    ndof_radius_tbin(0),
-    radius_phi_slope(0.0),
-    radius_phi_intercept(0.0),
-    chi2_radius_phi_line(0.0),
-    ndof_radius_phi_line(0),
-    circle_x0(0.0),
-    circle_y0(0.0),
-    circle_radius(0.0),
-    chi2_radius_phi_circle(0.0),
-    ndof_radius_phi_circle(0),
-    chi2_radius_phi_sagitta(0.0),
-    ndof_radius_phi_sagitta(0) {}
+    tbin_slope(0.0), tbin_intercept(0.0) {}
 
 InModuleThreadData::InModuleThreadData()
-  : region(0), sector(0), side(0), module_key(0), tGeometry(0), padMap(0),
-    pedestal(74.4), verbosity(0), use_field_on_fit(false),
+  : region(0), sector(0), side(0), module_key(0),
+    pedestal(74.4), verbosity(0),
     noise_max_consecutive_timebins(10), noise_keep_first_timebins(3), noise_adc_tolerance(5),
     blob_dt(2), blob_dp(2),
     search_dt(6), search_dp(6),
@@ -1200,12 +696,9 @@ InModuleTracks::InModuleTracks(const std::string& name,
     m_outputFile(0),
     m_tree(0),
     m_hits(0),
-    m_tGeometry(0),
-    m_padMap(0),
     m_inModuleTrackContainer(0),
     m_event(0),
     m_maxThreads(72),
-    m_useFieldOnFit(true),
     m_pedestal(0.0),
     m_noiseMaxConsecutiveTimebins(10),
     m_noiseKeepFirstTimebins(3),
@@ -1248,7 +741,7 @@ int InModuleTracks::Init(PHCompositeNode*)
     return Fun4AllReturnCodes::ABORTRUN;
   }
 
-  m_tree = new TTree("InModuleTracks", "TPC in-module straight-line pattern recognition");
+  m_tree = new TTree("InModuleTracks", "TPC in-module pattern recognition");
   m_tree->Branch("event",       &m_tree_event, "event/I");
 
   m_tree->Branch("track_id",    &m_tree_track_id);
@@ -1260,23 +753,6 @@ int InModuleTracks::Init(PHCompositeNode*)
   m_tree->Branch("first_layer", &m_tree_first_layer);
   m_tree->Branch("last_layer",  &m_tree_last_layer);
 
-  m_tree->Branch("pad_slope",      &m_tree_pad_slope);
-  m_tree->Branch("pad_intercept",  &m_tree_pad_intercept);
-  m_tree->Branch("tbin_slope",     &m_tree_tbin_slope);
-  m_tree->Branch("tbin_intercept", &m_tree_tbin_intercept);
-  m_tree->Branch("chi2_pad",       &m_tree_chi2_pad);
-  m_tree->Branch("chi2_tbin",      &m_tree_chi2_tbin);
-  m_tree->Branch("ndof_pad",       &m_tree_ndof_pad);
-  m_tree->Branch("ndof_tbin",      &m_tree_ndof_tbin);
-
-  m_tree->Branch("has_sagitta_fit",          &m_tree_has_sagitta_fit);
-  m_tree->Branch("sagitta_S",                &m_tree_sagitta_S);
-  m_tree->Branch("sagitta_x0",               &m_tree_sagitta_x0);
-  m_tree->Branch("sagitta_invR",             &m_tree_sagitta_invR);
-  m_tree->Branch("sagitta_theta",            &m_tree_sagitta_theta);
-  m_tree->Branch("sagitta_b",                &m_tree_sagitta_b);
-  m_tree->Branch("chi2_radius_phi_sagitta",  &m_tree_chi2_radius_phi_sagitta);
-  m_tree->Branch("ndof_radius_phi_sagitta",  &m_tree_ndof_radius_phi_sagitta);
 
   // Per-hit branches: TrkrHitSetContainer keys only
   m_tree->Branch("hit_event",     &m_tree_hit_event);
@@ -1320,26 +796,6 @@ int InModuleTracks::getNodes(PHCompositeNode* topNode)
   if (!m_hits)
   {
     std::cerr << Name() << "::getNodes - missing TRKR_HITSET" << std::endl;
-    return Fun4AllReturnCodes::ABORTRUN;
-  }
-
-  m_tGeometry = findNode::getClass<ActsGeometry>(topNode, "ActsGeometry");
-  if (!m_tGeometry)
-  {
-    std::cerr << Name() << "::getNodes - missing ActsGeometry" << std::endl;
-    return Fun4AllReturnCodes::ABORTRUN;
-  }
-
-  m_padMap = findNode::getClass<TpcPadMap>(topNode, "TPC_PADMAP");
-  if (!m_padMap)
-  {
-    std::cerr << Name() << "::getNodes - missing TPC_PADMAP" << std::endl;
-    return Fun4AllReturnCodes::ABORTRUN;
-  }
-
-  if (!m_padMap->isValid())
-  {
-    std::cerr << Name() << "::getNodes - TPC_PADMAP is invalid" << std::endl;
     return Fun4AllReturnCodes::ABORTRUN;
   }
 
@@ -1390,23 +846,6 @@ void InModuleTracks::reset_tree_vars()
   m_tree_first_layer.clear();
   m_tree_last_layer.clear();
 
-  m_tree_pad_slope.clear();
-  m_tree_pad_intercept.clear();
-  m_tree_tbin_slope.clear();
-  m_tree_tbin_intercept.clear();
-  m_tree_chi2_pad.clear();
-  m_tree_chi2_tbin.clear();
-  m_tree_ndof_pad.clear();
-  m_tree_ndof_tbin.clear();
-
-  m_tree_has_sagitta_fit.clear();
-  m_tree_sagitta_S.clear();
-  m_tree_sagitta_x0.clear();
-  m_tree_sagitta_invR.clear();
-  m_tree_sagitta_theta.clear();
-  m_tree_sagitta_b.clear();
-  m_tree_chi2_radius_phi_sagitta.clear();
-  m_tree_ndof_radius_phi_sagitta.clear();
 
   m_tree_hit_event.clear();
   m_tree_hit_track_id.clear();
@@ -1440,11 +879,8 @@ int InModuleTracks::process_event(PHCompositeNode*)
         td.module_key = TpcDefs::genModuleHitSetKey(static_cast<uint8_t>(region),
                                                     static_cast<uint8_t>(sector),
                                                     static_cast<uint8_t>(side));
-        td.tGeometry          = m_tGeometry;
-        td.padMap             = m_padMap;
         td.pedestal           = m_pedestal;
         td.verbosity          = Verbosity();
-        td.use_field_on_fit   = m_useFieldOnFit;
         td.noise_max_consecutive_timebins = m_noiseMaxConsecutiveTimebins;
         td.noise_keep_first_timebins      = m_noiseKeepFirstTimebins;
         td.noise_adc_tolerance = m_noiseAdcTolerance;
@@ -1541,41 +977,6 @@ int InModuleTracks::process_event(PHCompositeNode*)
       outTrack->set_first_layer(tr.first_layer);
       outTrack->set_last_layer(tr.last_layer);
 
-      outTrack->set_pad_slope(tr.pad_slope);
-      outTrack->set_pad_intercept(tr.pad_intercept);
-      outTrack->set_tbin_slope(tr.tbin_slope);
-      outTrack->set_tbin_intercept(tr.tbin_intercept);
-      outTrack->set_chi2_pad(tr.chi2_pad);
-      outTrack->set_chi2_tbin(tr.chi2_tbin);
-      outTrack->set_ndof_pad(tr.ndof_pad);
-      outTrack->set_ndof_tbin(tr.ndof_tbin);
-
-      outTrack->set_local_fit_mode(m_useFieldOnFit ? 1 : 0);
-
-      outTrack->set_radius_tbin_slope(tr.radius_tbin_slope);
-      outTrack->set_radius_tbin_intercept(tr.radius_tbin_intercept);
-      outTrack->set_chi2_radius_tbin(tr.chi2_radius_tbin);
-      outTrack->set_ndof_radius_tbin(tr.ndof_radius_tbin);
-
-      outTrack->set_radius_phi_slope(tr.radius_phi_slope);
-      outTrack->set_radius_phi_intercept(tr.radius_phi_intercept);
-      outTrack->set_chi2_radius_phi_line(tr.chi2_radius_phi_line);
-      outTrack->set_ndof_radius_phi_line(tr.ndof_radius_phi_line);
-
-      outTrack->set_circle_x0(tr.circle_x0);
-      outTrack->set_circle_y0(tr.circle_y0);
-      outTrack->set_circle_radius(tr.circle_radius);
-      outTrack->set_chi2_radius_phi_circle(tr.chi2_radius_phi_circle);
-      outTrack->set_ndof_radius_phi_circle(tr.ndof_radius_phi_circle);
-
-      outTrack->set_has_sagitta_fit(tr.has_sagitta_fit ? 1 : 0);
-      outTrack->set_sagitta_S(tr.sagitta_S);
-      outTrack->set_sagitta_x0(tr.sagitta_x0);
-      outTrack->set_sagitta_invR(tr.sagitta_invR);
-      outTrack->set_sagitta_theta(tr.sagitta_theta);
-      outTrack->set_sagitta_b(tr.sagitta_b);
-      outTrack->set_chi2_radius_phi_sagitta(tr.chi2_radius_phi_sagitta);
-      outTrack->set_ndof_radius_phi_sagitta(tr.ndof_radius_phi_sagitta);
 
       // TTree track-level fill
       m_tree_track_id.push_back(global_track_id);
@@ -1586,22 +987,6 @@ int InModuleTracks::process_event(PHCompositeNode*)
       m_tree_nrawhits.push_back(tr.nrawhits);
       m_tree_first_layer.push_back(tr.first_layer);
       m_tree_last_layer.push_back(tr.last_layer);
-      m_tree_pad_slope.push_back(tr.pad_slope);
-      m_tree_pad_intercept.push_back(tr.pad_intercept);
-      m_tree_tbin_slope.push_back(tr.tbin_slope);
-      m_tree_tbin_intercept.push_back(tr.tbin_intercept);
-      m_tree_chi2_pad.push_back(tr.chi2_pad);
-      m_tree_chi2_tbin.push_back(tr.chi2_tbin);
-      m_tree_ndof_pad.push_back(tr.ndof_pad);
-      m_tree_ndof_tbin.push_back(tr.ndof_tbin);
-      m_tree_has_sagitta_fit.push_back(tr.has_sagitta_fit ? 1 : 0);
-      m_tree_sagitta_S.push_back(tr.sagitta_S);
-      m_tree_sagitta_x0.push_back(tr.sagitta_x0);
-      m_tree_sagitta_invR.push_back(tr.sagitta_invR);
-      m_tree_sagitta_theta.push_back(tr.sagitta_theta);
-      m_tree_sagitta_b.push_back(tr.sagitta_b);
-      m_tree_chi2_radius_phi_sagitta.push_back(tr.chi2_radius_phi_sagitta);
-      m_tree_ndof_radius_phi_sagitta.push_back(tr.ndof_radius_phi_sagitta);
 
       // Hit references: (hitsetkey, hitkey) only — no data copy
       for (unsigned int ih = 0; ih < tr.raw_hit_indices.size(); ++ih)

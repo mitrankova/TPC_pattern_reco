@@ -3,7 +3,6 @@
 #include <fun4all/SubsysReco.h>
 #include <trackbase/TrkrDefs.h>
 
-#include "TpcPadMap.h"
 
 #include <string>
 #include <vector>
@@ -17,8 +16,6 @@ class InModuleTrackContainer;
 
 class TrkrHitSetContainer;
 class TrkrHitSet;
-class ActsGeometry;
-
 
 // ===================================================================
 // Per-module thread data
@@ -47,9 +44,6 @@ struct InModuleThreadData
     unsigned short pad;
     unsigned short tbin;
     unsigned short adc;
-
-    double local_phi;
-    double local_radius;
   };
 
   struct Blob
@@ -80,66 +74,15 @@ struct InModuleThreadData
     unsigned int nblobs;
     unsigned int nrawhits;
 
-    // Final fit parameters.
-    // These are refit after disconnected pieces are connected.
+    // Internal temporary straight-line parameters used only for chain growth
+    // and piece connection. They are not copied to InModuleTrackContainer or
+    // saved as track fit output.
     double pad_slope;
     double pad_intercept;
-
     double tbin_slope;
     double tbin_intercept;
 
-    double chi2_pad;
-    double chi2_tbin;
-
-    int ndof_pad;
-    int ndof_tbin;
-
-
-    bool has_local_line_fit;
-    bool has_radius_phi_line_fit;
-    bool has_radius_phi_circle_fit;
-    bool has_sagitta_fit;
-
-    // Sagitta fit parameters in the rotated frame used by weighted_circle_fit.
-    // These are always set when use_field_on_fit=true, even when the
-    // conversion back to a circle center fails.  The display evaluates
-    // sagitta_model_invR(r, S, x0_rot, invR) directly so it never falls
-    // back to a straight radius-phi line.
-    //
-    //   local_x_rot =  cos(sagitta_theta)*local_x + sin(sagitta_theta)*(local_y - sagitta_b)
-    //   local_y_rot = -sin(sagitta_theta)*local_x + cos(sagitta_theta)*(local_y - sagitta_b)
-    //   phi_fit(r) = asin( sagitta_model_invR(r_rot, S, x0_rot, invR) / r )  ... see display
-    double sagitta_S;
-    double sagitta_x0;
-    double sagitta_invR;
-    double sagitta_theta;   // rotation angle: atan(slope of local_x vs local_y line fit)
-    double sagitta_b;       // y-intercept of the pre-rotation line fit
-
-    double radius_tbin_slope;
-    double radius_tbin_intercept;
-    double chi2_radius_tbin;
-    int ndof_radius_tbin;
-
-    double radius_phi_slope;
-    double radius_phi_intercept;
-    double chi2_radius_phi_line;
-    int ndof_radius_phi_line;
-
-    double circle_x0;
-    double circle_y0;
-    double circle_radius;
-    double chi2_radius_phi_circle;
-    int ndof_radius_phi_circle;
-
-    double chi2_radius_phi_sagitta;
-    int ndof_radius_phi_sagitta;
-
-    // Blob indices used by this track.
     std::vector<unsigned int> blob_indices;
-
-    // Raw-hit indices into InModuleThreadData::raw_hits used by this track.
-    // These are translated to (hitsetkey, hitkey) pairs when filling the
-    // output InModuleTrack objects.
     std::vector<unsigned int> raw_hit_indices;
   };
 
@@ -149,18 +92,15 @@ struct InModuleThreadData
   int side;
   TrkrDefs::hitsetkey module_key;
 
-  ActsGeometry* tGeometry;
-  const TpcPadMap* padMap;
 
   // General configuration
   double pedestal;
   int verbosity;
-  bool use_field_on_fit;
 
   // Noise rejection
   int noise_max_consecutive_timebins;
   int noise_keep_first_timebins;
-  int noise_adc_tolerance;  
+  int noise_adc_tolerance;
 
   // Blob building
   int blob_dt;
@@ -180,7 +120,7 @@ struct InModuleThreadData
   double connect_dpad_slope;
   double connect_dtbin_slope;
 
-  // ADC weighting for fits
+  // ADC weighting for temporary internal fits
   double weight_power;
   double adc_weight_floor_frac;
 
@@ -209,10 +149,6 @@ class InModuleTracks : public SubsysReco
 
   void setMaxThreads(unsigned int n);
 
-
-  void setUseFieldOnFit(bool b) { m_useFieldOnFit = b; }
-
-
   void setPedestal(double p)
   {
     m_pedestal = p;
@@ -231,10 +167,6 @@ class InModuleTracks : public SubsysReco
   }
 
   // Reject long same-pad tails before blob/track building.
-  // If a same-layer/same-pad consecutive-timebin run is longer than
-  // max_consecutive_timebins, keep the first keep_first_timebins hits and
-  // remove the following non-increasing tail.
-  // Defaults: max_consecutive_timebins = 40, keep_first_timebins = 3.
   void setNoiseRejection(int max_consecutive_timebins = 10,
                          int keep_first_timebins = 3,
                          int adc_tolerance = 5)
@@ -277,14 +209,10 @@ class InModuleTracks : public SubsysReco
   TTree* m_tree;
 
   TrkrHitSetContainer* m_hits;
-  ActsGeometry* m_tGeometry;
-  TpcPadMap* m_padMap;
 
   InModuleTrackContainer* m_inModuleTrackContainer;
   int m_event;
   unsigned int m_maxThreads;
-
-  bool m_useFieldOnFit;
 
   // General configuration
   double m_pedestal;
@@ -315,7 +243,7 @@ class InModuleTracks : public SubsysReco
   // Event number saved once per tree entry
   int m_tree_event;
 
-  // One entry per found module-track.
+  // One entry per found module-track. No fit branches are saved here.
   std::vector<unsigned int> m_tree_track_id;
   std::vector<unsigned int> m_tree_region;
   std::vector<unsigned int> m_tree_sector;
@@ -326,43 +254,6 @@ class InModuleTracks : public SubsysReco
 
   std::vector<unsigned int> m_tree_first_layer;
   std::vector<unsigned int> m_tree_last_layer;
-
-  std::vector<double> m_tree_pad_slope;
-  std::vector<double> m_tree_pad_intercept;
-
-  std::vector<double> m_tree_tbin_slope;
-  std::vector<double> m_tree_tbin_intercept;
-
-  std::vector<double> m_tree_chi2_pad;
-  std::vector<double> m_tree_chi2_tbin;
-
-  std::vector<int> m_tree_ndof_pad;
-  std::vector<int> m_tree_ndof_tbin;
-
-  std::vector<int> m_tree_has_sagitta_fit;
-  std::vector<double> m_tree_sagitta_S;
-  std::vector<double> m_tree_sagitta_x0;
-  std::vector<double> m_tree_sagitta_invR;
-  std::vector<double> m_tree_sagitta_theta;
-  std::vector<double> m_tree_sagitta_b;
-  std::vector<double> m_tree_chi2_radius_phi_sagitta;
-  std::vector<int> m_tree_ndof_radius_phi_sagitta;
-
-  std::vector<double> m_tree_radius_tbin_slope;
-  std::vector<double> m_tree_radius_tbin_intercept;
-  std::vector<double> m_tree_chi2_radius_tbin;
-  std::vector<int> m_tree_ndof_radius_tbin;
-
-  std::vector<double> m_tree_radius_phi_slope;
-  std::vector<double> m_tree_radius_phi_intercept;
-  std::vector<double> m_tree_chi2_radius_phi_line;
-  std::vector<int> m_tree_ndof_radius_phi_line;
-
-  std::vector<double> m_tree_circle_x0;
-  std::vector<double> m_tree_circle_y0;
-  std::vector<double> m_tree_circle_radius;
-  std::vector<double> m_tree_chi2_radius_phi_circle;
-  std::vector<int> m_tree_ndof_radius_phi_circle;
 
   // Flat per-hit content for TTree reading.
   // Hits are identified by their TrkrHitSetContainer keys only;

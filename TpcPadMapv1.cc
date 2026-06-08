@@ -375,6 +375,13 @@ double TpcPadMapv1::get_local_radius(const unsigned int region,
   if (row < 0) return 0.0;
   return m_layer_radius[static_cast<int>(region) * N_ROWS + row];
 }
+/*
+double TpcPadMapv1::get_npads(const unsigned int region) const
+{
+  if (region < 0 || region > 2) return 0.0;
+  return m_pads_per_sector[region];
+}
+*/
 
 double TpcPadMapv1::get_radius(const unsigned int layer) const
 {

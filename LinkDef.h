@@ -12,6 +12,10 @@
 #pragma link C++ class FullTrackv1+;
 #pragma link C++ class FullTrackContainer+;
 #pragma link C++ class FullTrackContainerv1+;
+#pragma link C++ class FullTrackVertexer-;
+
+#pragma link C++ class Fitter+;
+#pragma link C++ class IdealPadMap+;
 
 #pragma link C++ class std::vector<std::pair<unsigned int, unsigned int>>+;
 #pragma link C++ class TpcPadMap+;

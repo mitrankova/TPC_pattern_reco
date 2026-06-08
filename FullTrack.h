@@ -71,6 +71,26 @@ class FullTrack : public PHObject
   virtual void set_ndof_phi(int) {}
   virtual void set_ndof_tbin(int) {}
 
+  // --- Event vertex estimated from full-track pairs ---
+  // r/phi are from the r-phi projection; tbin is from the r-tbin projection.
+  virtual int get_vertex_valid() const { return 0; }
+  virtual double get_vertex_x() const { return 0.0; }
+  virtual double get_vertex_y() const { return 0.0; }
+  virtual double get_vertex_r() const { return 0.0; }
+  virtual double get_vertex_phi() const { return 0.0; }
+  virtual double get_vertex_tbin() const { return 0.0; }
+  virtual unsigned int get_vertex_npairs() const { return 0; }
+  virtual double get_vertex_quality() const { return 0.0; }
+
+  virtual void set_vertex_valid(int) {}
+  virtual void set_vertex_x(double) {}
+  virtual void set_vertex_y(double) {}
+  virtual void set_vertex_r(double) {}
+  virtual void set_vertex_phi(double) {}
+  virtual void set_vertex_tbin(double) {}
+  virtual void set_vertex_npairs(unsigned int) {}
+  virtual void set_vertex_quality(double) {}
+  
   // Source InModuleTrack ids used by this full track.
   virtual void add_source_track(unsigned int /*track_id*/,
                                 unsigned int /*region*/,
