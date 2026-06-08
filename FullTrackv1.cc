@@ -29,6 +29,14 @@ void FullTrackv1::identify(std::ostream& os) const
      << " chi2_tbin=" << m_chi2_tbin
      << " ndof_phi=" << m_ndof_phi
      << " ndof_tbin=" << m_ndof_tbin
+     << " vertex_valid=" << m_vertex_valid
+     << " vertex_x=" << m_vertex_x
+     << " vertex_y=" << m_vertex_y
+     << " vertex_r=" << m_vertex_r
+     << " vertex_phi=" << m_vertex_phi
+     << " vertex_tbin=" << m_vertex_tbin
+     << " vertex_npairs=" << m_vertex_npairs
+     << " vertex_quality=" << m_vertex_quality
      << " source_tracks=" << m_source_track_ids.size()
      << " hit_indices=" << m_hit_indices.size()
      << std::endl;
@@ -57,6 +65,16 @@ void FullTrackv1::Reset()
   m_chi2_tbin = 0.0;
   m_ndof_phi = 0;
   m_ndof_tbin = 0;
+
+    m_vertex_valid = 0;
+  m_vertex_x = 0.0;
+  m_vertex_y = 0.0;
+  m_vertex_r = 0.0;
+  m_vertex_phi = 0.0;
+  m_vertex_tbin = 0.0;
+  m_vertex_npairs = 0;
+  m_vertex_quality = 0.0;
+
 
   m_source_track_ids.clear();
   m_source_regions.clear();

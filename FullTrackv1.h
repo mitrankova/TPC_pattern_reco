@@ -39,6 +39,24 @@ class FullTrackv1 : public FullTrack
   int get_ndof_phi() const override { return m_ndof_phi; }
   int get_ndof_tbin() const override { return m_ndof_tbin; }
 
+  int get_vertex_valid() const override { return m_vertex_valid; }
+  double get_vertex_x() const override { return m_vertex_x; }
+  double get_vertex_y() const override { return m_vertex_y; }
+  double get_vertex_r() const override { return m_vertex_r; }
+  double get_vertex_phi() const override { return m_vertex_phi; }
+  double get_vertex_tbin() const override { return m_vertex_tbin; }
+  unsigned int get_vertex_npairs() const override { return m_vertex_npairs; }
+  double get_vertex_quality() const override { return m_vertex_quality; }
+
+  void set_vertex_valid(int v) override { m_vertex_valid = v; }
+  void set_vertex_x(double v) override { m_vertex_x = v; }
+  void set_vertex_y(double v) override { m_vertex_y = v; }
+  void set_vertex_r(double v) override { m_vertex_r = v; }
+  void set_vertex_phi(double v) override { m_vertex_phi = v; }
+  void set_vertex_tbin(double v) override { m_vertex_tbin = v; }
+  void set_vertex_npairs(unsigned int v) override { m_vertex_npairs = v; }
+  void set_vertex_quality(double v) override { m_vertex_quality = v; }
+
   void set_event(unsigned int v) override { m_event = v; }
   void set_track_id(unsigned int v) override { m_track_id = v; }
   void set_side(int v) override { m_side = v; }
@@ -136,6 +154,15 @@ class FullTrackv1 : public FullTrack
   double m_chi2_tbin {0.0};
   int m_ndof_phi {0};
   int m_ndof_tbin {0};
+
+  int m_vertex_valid {0};
+  double m_vertex_x {0.0};
+  double m_vertex_y {0.0};
+  double m_vertex_r {0.0};
+  double m_vertex_phi {0.0};
+  double m_vertex_tbin {0.0};
+  unsigned int m_vertex_npairs {0};
+  double m_vertex_quality {0.0};
 
   std::vector<unsigned int> m_source_track_ids;
   std::vector<unsigned int> m_source_regions;
