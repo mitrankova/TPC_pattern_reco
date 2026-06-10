@@ -26,6 +26,11 @@
 
 #include <TFile.h>
 #include <TTree.h>
+#include <TH1D.h>
+#include <TH2D.h>
+#include <TBox.h>
+#include <TLine.h>
+#include <TColor.h>
 
 #include <algorithm>
 #include <cmath>
@@ -70,6 +75,14 @@ namespace
     while (phi > M_PI) phi -= 2.0 * M_PI;
     while (phi <= -M_PI) phi += 2.0 * M_PI;
     return phi;
+  }
+
+  int wrapped_sector_delta(const unsigned int sector_a, const unsigned int sector_b)
+  {
+    int d = static_cast<int>(sector_b) - static_cast<int>(sector_a);
+    while (d > 6) d -= 12;
+    while (d < -6) d += 12;
+    return d;
   }
 
   double sagitta_model_derivative(double xrot, double x0, double invR)
@@ -234,9 +247,11 @@ FullTrackConnector::Candidate::Candidate()
 FullTrackConnector::FullTrackConnector(const std::string& name, const std::string& filename)
   : SubsysReco(name)
   , m_outputFileName(filename)
+  , m_debugOutputFileName("FullTrackConnectorDebug.root")
   , m_inputNodeName("INMODULETRACKS")
   , m_outputNodeName("FULLTRACKS")
   , m_outputFile(nullptr)
+  , m_debugOutputFile(nullptr)
   , m_tree(nullptr)
   , m_inModuleTrackContainer(nullptr)
   , m_fullTrackContainer(nullptr)
@@ -257,6 +272,12 @@ FullTrackConnector::~FullTrackConnector()
   delete m_idealPadMap;
   m_idealPadMap = nullptr;
 
+  if (m_debugOutputFile)
+  {
+    delete m_debugOutputFile;
+    m_debugOutputFile = nullptr;
+  }
+
   if (m_outputFile)
   {
     delete m_outputFile;
@@ -272,6 +293,14 @@ int FullTrackConnector::Init(PHCompositeNode*)
     std::cerr << Name() << "::Init - cannot create " << m_outputFileName << std::endl;
     return Fun4AllReturnCodes::ABORTRUN;
   }
+
+  m_debugOutputFile = new TFile(m_debugOutputFileName.c_str(), "RECREATE");
+  if (!m_debugOutputFile || m_debugOutputFile->IsZombie())
+  {
+    std::cerr << Name() << "::Init - cannot create debug file " << m_debugOutputFileName << std::endl;
+    return Fun4AllReturnCodes::ABORTRUN;
+  }
+  create_debug_histograms();
 
   m_tree = new TTree("FullTracks", "Full tracks connected from InModuleTracks");
   m_tree->Branch("event", &m_tree_event, "event/I");
@@ -327,6 +356,15 @@ int FullTrackConnector::End(PHCompositeNode*)
     delete m_outputFile;
     m_outputFile = nullptr;
   }
+
+  write_debug_histograms();
+  if (m_debugOutputFile)
+  {
+    m_debugOutputFile->Close();
+    delete m_debugOutputFile;
+    m_debugOutputFile = nullptr;
+  }
+
   return Fun4AllReturnCodes::EVENT_OK;
 }
 
@@ -370,6 +408,91 @@ int FullTrackConnector::createNodes(PHCompositeNode* topNode)
   }
 
   return Fun4AllReturnCodes::EVENT_OK;
+}
+
+void FullTrackConnector::create_debug_histograms()
+{
+  if (!m_debugOutputFile) return;
+  m_debugOutputFile->cd();
+
+  m_h_dphi = new TH1D("h_dphi", "#Delta#phi at match point;|#Delta#phi| [rad];tested pairs", 200, 0.0, std::max(0.2, 5.0 * m_connect_dphi));
+  m_h_dtbin = new TH1D("h_dtbin", "#Deltatbin at match point;|#Deltatbin|;tested pairs", 200, 0.0, std::max(50.0, 5.0 * m_connect_dtbin));
+  m_h_dmphi = new TH1D("h_dmphi", "#Delta(d#phi/dr);|#Delta(d#phi/dr)| [rad/cm];tested pairs", 200, 0.0, std::max(0.08, 5.0 * m_connect_dphi_slope));
+  m_h_dmtbin = new TH1D("h_dmtbin", "#Delta(dtbin/dr);|#Delta(dtbin/dr)| [tbin/cm];tested pairs", 200, 0.0, std::max(20.0, 5.0 * m_connect_dtbin_slope));
+  m_h_score = new TH1D("h_score", "accepted connection score;score;accepted connections", 200, 0.0, 20.0);
+
+  m_h_dphi_vs_dtbin = new TH2D("h_dphi_vs_dtbin", "#Delta#phi vs #Deltatbin;|#Delta#phi| [rad];|#Deltatbin|", 160, 0.0, std::max(0.2, 5.0 * m_connect_dphi), 160, 0.0, std::max(50.0, 5.0 * m_connect_dtbin));
+  m_h_dmphi_vs_dmtbin = new TH2D("h_dmphi_vs_dmtbin", "slope residuals;|#Delta(d#phi/dr)| [rad/cm];|#Delta(dtbin/dr)| [tbin/cm]", 160, 0.0, std::max(0.08, 5.0 * m_connect_dphi_slope), 160, 0.0, std::max(20.0, 5.0 * m_connect_dtbin_slope));
+  m_h_dphi_vs_dmphi = new TH2D("h_dphi_vs_dmphi", "#phi position vs slope residual;|#Delta#phi| [rad];|#Delta(d#phi/dr)| [rad/cm]", 160, 0.0, std::max(0.2, 5.0 * m_connect_dphi), 160, 0.0, std::max(0.08, 5.0 * m_connect_dphi_slope));
+
+  m_h_layer_gap = new TH1D("h_layer_gap", "accepted connection layer gap;b.first_layer - a.last_layer - 1;accepted connections", 16, -0.5, 15.5);
+  m_h_nsegments = new TH1D("h_nsegments", "pieces per full track;nsegments;full tracks", 16, -0.5, 15.5);
+  m_h_matched_sector_delta = new TH1D("h_matched_sector_delta", "accepted matched sector difference;wrapped #Delta sector;accepted connections", 25, -12.5, 12.5);
+}
+
+void FullTrackConnector::write_debug_histograms()
+{
+  if (!m_debugOutputFile) return;
+  m_debugOutputFile->cd();
+
+  if (m_h_dphi) m_h_dphi->Write();
+  if (m_h_dtbin) m_h_dtbin->Write();
+  if (m_h_dmphi) m_h_dmphi->Write();
+  if (m_h_dmtbin) m_h_dmtbin->Write();
+  if (m_h_score) m_h_score->Write();
+  if (m_h_dphi_vs_dtbin) m_h_dphi_vs_dtbin->Write();
+  if (m_h_dmphi_vs_dmtbin) m_h_dmphi_vs_dmtbin->Write();
+  if (m_h_dphi_vs_dmphi) m_h_dphi_vs_dmphi->Write();
+  if (m_h_layer_gap) m_h_layer_gap->Write();
+  if (m_h_nsegments) m_h_nsegments->Write();
+  if (m_h_matched_sector_delta) m_h_matched_sector_delta->Write();
+
+  if (m_h_dphi)
+  {
+    TLine line(m_connect_dphi, 0.0, m_connect_dphi, m_h_dphi->GetMaximum());
+    line.SetLineColor(kRed + 1);
+    line.SetLineWidth(2);
+    line.Write("cut_line_dphi");
+  }
+  if (m_h_dtbin)
+  {
+    TLine line(m_connect_dtbin, 0.0, m_connect_dtbin, m_h_dtbin->GetMaximum());
+    line.SetLineColor(kRed + 1);
+    line.SetLineWidth(2);
+    line.Write("cut_line_dtbin");
+  }
+  if (m_h_dmphi)
+  {
+    TLine line(m_connect_dphi_slope, 0.0, m_connect_dphi_slope, m_h_dmphi->GetMaximum());
+    line.SetLineColor(kRed + 1);
+    line.SetLineWidth(2);
+    line.Write("cut_line_dmphi");
+  }
+  if (m_h_dmtbin)
+  {
+    TLine line(m_connect_dtbin_slope, 0.0, m_connect_dtbin_slope, m_h_dmtbin->GetMaximum());
+    line.SetLineColor(kRed + 1);
+    line.SetLineWidth(2);
+    line.Write("cut_line_dmtbin");
+  }
+
+  TBox box_pos(0.0, 0.0, m_connect_dphi, m_connect_dtbin);
+  box_pos.SetFillStyle(0);
+  box_pos.SetLineColor(kRed + 1);
+  box_pos.SetLineWidth(2);
+  box_pos.Write("cut_box_dphi_vs_dtbin");
+
+  TBox box_slope(0.0, 0.0, m_connect_dphi_slope, m_connect_dtbin_slope);
+  box_slope.SetFillStyle(0);
+  box_slope.SetLineColor(kRed + 1);
+  box_slope.SetLineWidth(2);
+  box_slope.Write("cut_box_dmphi_vs_dmtbin");
+
+  TBox box_phi_slope(0.0, 0.0, m_connect_dphi, m_connect_dphi_slope);
+  box_phi_slope.SetFillStyle(0);
+  box_phi_slope.SetLineColor(kRed + 1);
+  box_phi_slope.SetLineWidth(2);
+  box_phi_slope.Write("cut_box_dphi_vs_dmphi");
 }
 
 void FullTrackConnector::reset_tree_vars()
@@ -624,6 +747,14 @@ bool FullTrackConnector::candidates_can_connect(const Candidate& a, const Piece&
   const double dmphi = std::fabs(predict_phi_slope(a, rmatch) - predict_phi_slope(b, rmatch));
   const double dmtbin = std::fabs(a.tbin_slope_r - b.tbin_slope);
 
+  if (m_h_dphi) m_h_dphi->Fill(dphi);
+  if (m_h_dtbin) m_h_dtbin->Fill(dtbin);
+  if (m_h_dmphi) m_h_dmphi->Fill(dmphi);
+  if (m_h_dmtbin) m_h_dmtbin->Fill(dmtbin);
+  if (m_h_dphi_vs_dtbin) m_h_dphi_vs_dtbin->Fill(dphi, dtbin);
+  if (m_h_dmphi_vs_dmtbin) m_h_dmphi_vs_dmtbin->Fill(dmphi, dmtbin);
+  if (m_h_dphi_vs_dmphi) m_h_dphi_vs_dmphi->Fill(dphi, dmphi);
+
   if (dphi > m_connect_dphi) return false;
   if (dtbin > m_connect_dtbin) return false;
   if (dmphi > m_connect_dphi_slope) return false;
@@ -639,6 +770,7 @@ bool FullTrackConnector::candidates_can_connect(const Candidate& a, const Piece&
         + w_mphi  * (dmphi / m_connect_dphi_slope) * (dmphi / m_connect_dphi_slope)
         + w_mtbin * (dmtbin / m_connect_dtbin_slope) * (dmtbin / m_connect_dtbin_slope)
         + 0.05 * static_cast<double>(gap);
+
   return true;
 }
 
@@ -697,6 +829,15 @@ void FullTrackConnector::connect_side_pieces(const std::vector<Piece>& pieces, i
         Candidate refit;
         if (refit_candidate(pieces, trial_indices, refit))
         {
+          const Piece& accepted_piece = pieces[static_cast<unsigned int>(best_j)];
+          const unsigned int accepted_gap = accepted_piece.first_layer - current.last_layer - 1;
+          if (m_h_score) m_h_score->Fill(best_score);
+          if (m_h_layer_gap) m_h_layer_gap->Fill(static_cast<double>(accepted_gap));
+          if (m_h_matched_sector_delta)
+          {
+            m_h_matched_sector_delta->Fill(static_cast<double>(wrapped_sector_delta(current.last_sector, accepted_piece.sector)));
+          }
+
           current = refit;
           current_indices.swap(trial_indices);
           used[best_j] = 1;
@@ -734,6 +875,7 @@ int FullTrackConnector::process_event(PHCompositeNode*)
   {
     const Candidate& c = full_tracks[it];
     const unsigned int full_id = m_fullTrackContainer ? m_fullTrackContainer->size() : it;
+    if (m_h_nsegments) m_h_nsegments->Fill(static_cast<double>(c.nsegments));
 
     FullTrackv1* out = new FullTrackv1();
     out->set_event(static_cast<unsigned int>(m_event));

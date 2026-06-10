@@ -11,6 +11,8 @@ class IdealPadMap;
 class PHCompositeNode;
 class TFile;
 class TTree;
+class TH1D;
+class TH2D;
 
 class InModuleTrackContainer;
 class FullTrackContainer;
@@ -30,6 +32,7 @@ class FullTrackConnector : public SubsysReco
 
   void setInputNodeName(const std::string& n)  { m_inputNodeName  = n; }
   void setOutputNodeName(const std::string& n) { m_outputNodeName = n; }
+  void setDebugOutputFileName(const std::string& n) { m_debugOutputFileName = n; }
 
   void setConnectMaxLayerGap(unsigned int n)   { m_connectMaxLayerGap = n; }
 
@@ -136,6 +139,8 @@ class FullTrackConnector : public SubsysReco
   int  getNodes(PHCompositeNode*);
   int  createNodes(PHCompositeNode*);
   void reset_tree_vars();
+  void create_debug_histograms();
+  void write_debug_histograms();
 
   bool make_piece(unsigned int source_index, Piece& p) const;
 
@@ -161,10 +166,12 @@ class FullTrackConnector : public SubsysReco
 
   // ---------------------------------------------------------------
   std::string m_outputFileName;
+  std::string m_debugOutputFileName;
   std::string m_inputNodeName;
   std::string m_outputNodeName;
 
   TFile* m_outputFile;
+  TFile* m_debugOutputFile;
   TTree* m_tree;
 
   InModuleTrackContainer* m_inModuleTrackContainer;
@@ -180,6 +187,19 @@ class FullTrackConnector : public SubsysReco
   double       m_connect_dphi_slope;
   double       m_connect_dtbin_slope;
   bool         m_useSagittaPhiFit;
+
+  // Debug matching histograms
+  TH1D* m_h_dphi;
+  TH1D* m_h_dtbin;
+  TH1D* m_h_dmphi;
+  TH1D* m_h_dmtbin;
+  TH1D* m_h_score;
+  TH2D* m_h_dphi_vs_dtbin;
+  TH2D* m_h_dmphi_vs_dmtbin;
+  TH2D* m_h_dphi_vs_dmphi;
+  TH1D* m_h_layer_gap;
+  TH1D* m_h_nsegments;
+  TH1D* m_h_matched_sector_delta;
 
   // ---------------------------------------------------------------
   // TTree branches
