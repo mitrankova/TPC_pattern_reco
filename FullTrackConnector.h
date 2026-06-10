@@ -3,7 +3,7 @@
 #include <fun4all/SubsysReco.h>
 #include <trackbase/TrkrDefs.h>
 
-class TpcPadMap;
+class IdealPadMap;
 
 #include <string>
 #include <vector>
@@ -14,6 +14,7 @@ class TTree;
 
 class InModuleTrackContainer;
 class FullTrackContainer;
+class TrkrHitSetContainer;
 
 class FullTrackConnector : public SubsysReco
 {
@@ -32,28 +33,26 @@ class FullTrackConnector : public SubsysReco
 
   void setConnectMaxLayerGap(unsigned int n)   { m_connectMaxLayerGap = n; }
 
-  // Connection window in pad units and tbin units at the match layer.
-  // "pad units" here means pads of the *source* (lower-layer) region.
-  void setConnectWindow(double dpad, double dtbin)
+  // Connection window in global phi radians and tbin units at the match radius.
+  void setConnectWindow(double dphi, double dtbin)
   {
-    m_connect_dpad  = dpad;
+    m_connect_dphi  = dphi;
     m_connect_dtbin = dtbin;
   }
 
-  // Slope windows: d(pad)/d(layer) and d(tbin)/d(layer).
-  // Slopes from adjacent regions are rescaled to the same pad-pitch before
-  // comparison, so these windows are in consistent units.
-  void setConnectSlopeWindow(double dpad_slope, double dtbin_slope)
+  // Slope windows: d(phi)/d(radius) and d(tbin)/d(radius).
+  void setConnectSlopeWindow(double dphi_slope, double dtbin_slope)
   {
-    m_connect_dpad_slope  = dpad_slope;
+    m_connect_dphi_slope  = dphi_slope;
     m_connect_dtbin_slope = dtbin_slope;
   }
 
+  void setUseSagittaPhiFit(bool v) { m_useSagittaPhiFit = v; }
+
  public:
   // ---------------------------------------------------------------
-  // Piece: one InModuleTrack kept in raw hardware coordinates.
-  // Fit parameterisation:   pad(layer)  = pad_slope  * layer + pad_intercept
-  //                         tbin(layer) = tbin_slope * layer + tbin_intercept
+  // Piece: one InModuleTrack refit from stored hit indices for temporary matching.
+  // Fits are in ideal (radius, global phi) and (radius, timebin) coordinates.
   // ---------------------------------------------------------------
   struct Piece
   {
@@ -71,14 +70,22 @@ class FullTrackConnector : public SubsysReco
     unsigned int nblobs;
     unsigned int nrawhits;
 
-    // Hardware-space linear fit (same units as InModuleTrack output).
-    double pad_slope;
-    double pad_intercept;
+    double phi_slope;
+    double phi_intercept;
+    double phi_S;
+    double phi_x0;
+    double phi_invR;
+    double phi_theta;
+    double phi_bline;
+    bool phi_sagitta_ok;
+
     double tbin_slope;
     double tbin_intercept;
 
-    // Number of pads in this piece's region — cached for boundary rescaling.
-    unsigned int npads_region;
+    std::vector<double> radius_values;
+    std::vector<double> phi_values;
+    std::vector<double> tbin_values;
+    std::vector<double> weights;
 
     std::vector<TrkrDefs::hitsetkey> hitsetkeys;
     std::vector<TrkrDefs::hitkey>    hitkeys;
@@ -86,12 +93,7 @@ class FullTrackConnector : public SubsysReco
 
   // ---------------------------------------------------------------
   // Candidate: a growing full track built from one or more Pieces.
-  // The global fit is also kept in hardware space using radius as the
-  // independent variable so that it is well-defined across regions.
-  //   pad_eff(radius) = pad_slope_r * radius + pad_intercept_r
-  //   tbin   (radius) = tbin_slope_r * radius + tbin_intercept_r
-  // where pad_eff is pad rescaled to "region-0 equivalent" units so
-  // that a single line can span all three regions.
+  // Fits are temporary and are not copied into the output FullTrack object.
   // ---------------------------------------------------------------
   struct Candidate
   {
@@ -109,14 +111,20 @@ class FullTrackConnector : public SubsysReco
     unsigned int nblobs;
     unsigned int nrawhits;
 
-    // Global fit in (radius, pad_eff) and (radius, tbin).
-    double pad_slope_r;       // d(pad_eff)/d(radius)
-    double pad_intercept_r;
-    double tbin_slope_r;      // d(tbin)/d(radius)
+    double phi_slope;
+    double phi_intercept;
+    double phi_S;
+    double phi_x0;
+    double phi_invR;
+    double phi_theta;
+    double phi_bline;
+    bool phi_sagitta_ok;
+
+    double tbin_slope_r;
     double tbin_intercept_r;
-    double chi2_pad;
+    double chi2_phi;
     double chi2_tbin;
-    int    ndof_pad;
+    int    ndof_phi;
     int    ndof_tbin;
 
     std::vector<unsigned int>        piece_indices;
@@ -129,26 +137,23 @@ class FullTrackConnector : public SubsysReco
   int  createNodes(PHCompositeNode*);
   void reset_tree_vars();
 
-  // Pad-count for region (thin wrapper so we don't scatter magic numbers).
-  unsigned int npads_for_region(unsigned int region) const;
-
-  // Rescale pad from region src to the equivalent pad in region dst.
-  // This is a simple linear scale: same physical phi → same fraction of pads.
-  double rescale_pad(double pad, unsigned int src_region,
-                     unsigned int dst_region) const;
-
   bool make_piece(unsigned int source_index, Piece& p) const;
 
-  // Refit a growing candidate (radius-space line through all piece endpoints).
+  double predict_phi(const Piece& p, double radius) const;
+  double predict_phi(const Candidate& c, double radius) const;
+  double predict_phi_slope(const Piece& p, double radius) const;
+  double predict_phi_slope(const Candidate& c, double radius) const;
+
+  // Refit a growing candidate for temporary matching only.
   bool refit_candidate(const std::vector<Piece>& pieces,
                        const std::vector<unsigned int>& piece_indices,
                        Candidate& c) const;
 
   // Check whether piece b can be appended to candidate a.
-  // Returns true and fills score.  No phi conversion — pure hardware space.
   bool candidates_can_connect(const Candidate& a,
                                const Piece&     b,
-                               double&          score) const;
+                               double&          score,
+                               double&          b_phi_intercept_shifted) const;
 
   void connect_side_pieces(const std::vector<Piece>& pieces,
                             int side,
@@ -164,15 +169,17 @@ class FullTrackConnector : public SubsysReco
 
   InModuleTrackContainer* m_inModuleTrackContainer;
   FullTrackContainer*     m_fullTrackContainer;
+  TrkrHitSetContainer*    m_hits;
 
-  int        m_event;
-  TpcPadMap* m_padMap;
+  int          m_event;
+  IdealPadMap* m_idealPadMap;
 
   unsigned int m_connectMaxLayerGap;
-  double       m_connect_dpad;        // pad window at match point (src region units)
+  double       m_connect_dphi;
   double       m_connect_dtbin;
-  double       m_connect_dpad_slope;  // d(pad_eff)/d(layer) slope window
+  double       m_connect_dphi_slope;
   double       m_connect_dtbin_slope;
+  bool         m_useSagittaPhiFit;
 
   // ---------------------------------------------------------------
   // TTree branches
@@ -189,14 +196,6 @@ class FullTrackConnector : public SubsysReco
   std::vector<unsigned int>  m_tree_last_sector;
   std::vector<unsigned int>  m_tree_first_region;
   std::vector<unsigned int>  m_tree_last_region;
-  std::vector<double>        m_tree_pad_slope_r;
-  std::vector<double>        m_tree_pad_intercept_r;
-  std::vector<double>        m_tree_tbin_slope_r;
-  std::vector<double>        m_tree_tbin_intercept_r;
-  std::vector<double>        m_tree_chi2_pad;
-  std::vector<double>        m_tree_chi2_tbin;
-  std::vector<int>           m_tree_ndof_pad;
-  std::vector<int>           m_tree_ndof_tbin;
 
   std::vector<unsigned int>  m_tree_source_full_track_id;
   std::vector<unsigned int>  m_tree_source_inmodule_track_id;
