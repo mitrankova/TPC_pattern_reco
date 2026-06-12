@@ -14,6 +14,11 @@
 #pragma link C++ class FullTrackContainerv1+;
 #pragma link C++ class FullTrackVertexer-;
 
+#pragma link C++ class TpcPolyTrack+;
+#pragma link C++ class TpcPolyTrackv1+;
+#pragma link C++ class TpcPolyTrackContainer+;
+#pragma link C++ class TpcPolyTrackContainerv1+;
+
 #pragma link C++ class Fitter+;
 #pragma link C++ class IdealPadMap+;
 

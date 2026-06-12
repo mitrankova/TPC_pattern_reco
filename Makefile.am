@@ -19,6 +19,11 @@ pkginclude_HEADERS = \
   FullTrackContainerv1.h \
   FullTrackConnector.h \
   FullTrackVertexer.h \
+  TpcPolyTrack.h \
+  TpcPolyTrackv1.h \
+  TpcPolyTrackContainer.h \
+  TpcPolyTrackContainerv1.h \
+  TpcPolyTrackReco.h \
   Fitter.h \
   IdealPadMap.h \
   TpcPadMap.h \
@@ -38,6 +43,11 @@ libInModuleTracks_la_SOURCES = \
   FullTrackContainerv1.cc \
   FullTrackConnector.cc \
   FullTrackVertexer.cc \
+  TpcPolyTrack.cc \
+  TpcPolyTrackv1.cc \
+  TpcPolyTrackContainer.cc \
+  TpcPolyTrackContainerv1.cc \
+  TpcPolyTrackReco.cc \
   Fitter.cc \
   IdealPadMap.cc \
   TpcPadMap.cc \
@@ -62,7 +72,8 @@ libInModuleTracks_la_LIBADD = \
   -lSubsysReco \
   -ltpc_io \
   -ltrack_io \
-  -ltrackbase_historic_io
+  -ltrackbase_historic_io \
+  -lPHGarfield
 BUILT_SOURCES = \
   testexternals.cc \
   InModuleTrackDict.cc
@@ -70,7 +81,7 @@ noinst_PROGRAMS = \
   testexternals
 testexternals_SOURCES = testexternals.cc
 testexternals_LDADD   = libInModuleTracks.la
-InModuleTrackDict.cc: InModuleTrack.h InModuleTrackv1.h InModuleTrackContainer.h InModuleTrackContainerv1.h FullTrack.h FullTrackv1.h FullTrackContainer.h FullTrackContainerv1.h FullTrackVertexer.h Fitter.h IdealPadMap.h TpcPadMap.h TpcPadMapv1.h LinkDef.h
+InModuleTrackDict.cc: InModuleTrack.h InModuleTrackv1.h InModuleTrackContainer.h InModuleTrackContainerv1.h FullTrack.h FullTrackv1.h FullTrackContainer.h FullTrackContainerv1.h FullTrackVertexer.h TpcPolyTrack.h TpcPolyTrackv1.h TpcPolyTrackContainer.h TpcPolyTrackContainerv1.h Fitter.h IdealPadMap.h TpcPadMap.h TpcPadMapv1.h LinkDef.h
 	rootcling -f $@ -c $(AM_CPPFLAGS) $^
 testexternals.cc:
 	echo "//*** this is a generated file. Do not commit, do not edit" > $@
