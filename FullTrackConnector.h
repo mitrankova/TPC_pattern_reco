@@ -197,6 +197,11 @@ class FullTrackConnector : public SubsysReco
   TH2D* m_h_dphi_vs_dtbin;
   TH2D* m_h_dmphi_vs_dmtbin;
   TH2D* m_h_dphi_vs_dmphi;
+  TH2D* m_h_tbin_slope_vs_first_tbin;
+  TH2D* m_h_tbin_slope_vs_last_tbin;
+  TH2D* m_h_track_tbin_slope_vs_tbin_span_3modules;
+  TH2D* m_h_track_tbin_slope_vs_first_tbin_3modules;
+  TH2D* m_h_track_tbin_slope_vs_last_tbin_3modules;
   TH1D* m_h_layer_gap;
   TH1D* m_h_nsegments;
   TH1D* m_h_matched_sector_delta;
