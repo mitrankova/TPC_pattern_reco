@@ -17,6 +17,10 @@ pkginclude_HEADERS = \
   FullTrackv1.h \
   FullTrackContainer.h \
   FullTrackContainerv1.h \
+  FullTrackVertex.h \
+  FullTrackVertexv1.h \
+  FullTrackVertexContainer.h \
+  FullTrackVertexContainerv1.h \
   FullTrackConnector.h \
   FullTrackVertexer.h \
   TpcPolyTrack.h \
@@ -24,6 +28,7 @@ pkginclude_HEADERS = \
   TpcPolyTrackContainer.h \
   TpcPolyTrackContainerv1.h \
   TpcPolyTrackReco.h \
+  TpcPolyHelixFitter.h \
   Fitter.h \
   IdealPadMap.h \
   TpcPadMap.h \
@@ -41,6 +46,10 @@ libInModuleTracks_la_SOURCES = \
   FullTrackv1.cc \
   FullTrackContainer.cc \
   FullTrackContainerv1.cc \
+  FullTrackVertex.cc \
+  FullTrackVertexv1.cc \
+  FullTrackVertexContainer.cc \
+  FullTrackVertexContainerv1.cc \
   FullTrackConnector.cc \
   FullTrackVertexer.cc \
   TpcPolyTrack.cc \
@@ -48,6 +57,7 @@ libInModuleTracks_la_SOURCES = \
   TpcPolyTrackContainer.cc \
   TpcPolyTrackContainerv1.cc \
   TpcPolyTrackReco.cc \
+  TpcPolyHelixFitter.cc \
   Fitter.cc \
   IdealPadMap.cc \
   TpcPadMap.cc \
@@ -81,7 +91,7 @@ noinst_PROGRAMS = \
   testexternals
 testexternals_SOURCES = testexternals.cc
 testexternals_LDADD   = libInModuleTracks.la
-InModuleTrackDict.cc: InModuleTrack.h InModuleTrackv1.h InModuleTrackContainer.h InModuleTrackContainerv1.h FullTrack.h FullTrackv1.h FullTrackContainer.h FullTrackContainerv1.h FullTrackVertexer.h TpcPolyTrack.h TpcPolyTrackv1.h TpcPolyTrackContainer.h TpcPolyTrackContainerv1.h Fitter.h IdealPadMap.h TpcPadMap.h TpcPadMapv1.h LinkDef.h
+InModuleTrackDict.cc: InModuleTrack.h InModuleTrackv1.h InModuleTrackContainer.h InModuleTrackContainerv1.h FullTrack.h FullTrackv1.h FullTrackContainer.h FullTrackContainerv1.h FullTrackVertex.h FullTrackVertexv1.h FullTrackVertexContainer.h FullTrackVertexContainerv1.h FullTrackVertexer.h TpcPolyTrack.h TpcPolyTrackv1.h TpcPolyTrackContainer.h TpcPolyTrackContainerv1.h Fitter.h IdealPadMap.h TpcPadMap.h TpcPadMapv1.h LinkDef.h
 	rootcling -f $@ -c $(AM_CPPFLAGS) $^
 testexternals.cc:
 	echo "//*** this is a generated file. Do not commit, do not edit" > $@

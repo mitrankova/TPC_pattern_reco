@@ -1,720 +1,481 @@
 #include "FullTrackVertexer.h"
 
+#include "Fitter.h"
 #include "FullTrack.h"
 #include "FullTrackContainer.h"
+#include "FullTrackVertexv1.h"
+#include "FullTrackVertexContainer.h"
+#include "FullTrackVertexContainerv1.h"
+#include "IdealPadMap.h"
 
 #include <fun4all/Fun4AllReturnCodes.h>
 
 #include <phool/PHCompositeNode.h>
+#include <phool/PHIODataNode.h>
+#include <phool/PHNodeIterator.h>
+#include <phool/PHObject.h>
 #include <phool/getClass.h>
 
-#include <TFile.h>
-#include <TTree.h>
+#include <trackbase/TpcDefs.h>
+#include <trackbase/TrkrHit.h>
+#include <trackbase/TrkrHitSet.h>
+#include <trackbase/TrkrHitSetContainer.h>
+
+#include <TMath.h>
 
 #include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <limits>
-#include <set>
+#include <vector>
 
 namespace
 {
-  bool finite_number(const double x)
+  double wrap_phi(double phi)
   {
-    return (x == x && std::fabs(x) < 1.0e30);
-  }
-
-  double wrap_to_pi(double phi)
-  {
-    while (phi > M_PI) phi -= 2.0 * M_PI;
-    while (phi <= -M_PI) phi += 2.0 * M_PI;
+    while (phi > TMath::Pi()) phi -= 2.0 * TMath::Pi();
+    while (phi <= -TMath::Pi()) phi += 2.0 * TMath::Pi();
     return phi;
   }
 
-  double unwrap_phi_to_reference(double phi, const double ref)
+  double unwrap_phi_near(double phi, const double reference)
   {
-    while (phi - ref > M_PI) phi -= 2.0 * M_PI;
-    while (phi - ref < -M_PI) phi += 2.0 * M_PI;
+    while (phi - reference > TMath::Pi()) phi -= 2.0 * TMath::Pi();
+    while (phi - reference < -TMath::Pi()) phi += 2.0 * TMath::Pi();
     return phi;
   }
 
-  double sqr(const double x) { return x * x; }
+  bool is_good_number(const double x)
+  {
+    return std::isfinite(x) && std::fabs(x) < 1.0e30;
+  }
+
+  double sagitta_model_derivative(const double xrot,
+                                  const double x0,
+                                  const double invR)
+  {
+    const double dx = xrot - x0;
+    const double dx2 = dx * dx;
+    const double invR2 = invR * invR;
+    const double invR3 = invR2 * invR;
+    const double invR5 = invR3 * invR2;
+    return -invR * dx - 0.5 * invR3 * dx2 * dx - 0.375 * invR5 * dx2 * dx2 * dx;
+  }
+
+  double sagitta_phi_at_radius(const double radius,
+                               const Fitter::SagittaFit& fit)
+  {
+    const double c = std::cos(fit.theta);
+    const double s = std::sin(fit.theta);
+    double yy = std::tan(fit.theta) * radius;
+
+    for (unsigned int iter = 0; iter < 25; ++iter)
+    {
+      const double xrot = c * radius + s * yy;
+      const double yrot = -s * radius + c * yy;
+      const double f = Fitter::sagittaModel(xrot, fit.S, fit.x0, fit.invR);
+      const double g = yrot - f;
+      const double df = sagitta_model_derivative(xrot, fit.x0, fit.invR);
+      const double dg = c - df * s;
+      if (std::fabs(dg) < 1.0e-12) break;
+      const double step = g / dg;
+      yy -= step;
+      if (std::fabs(step) < 1.0e-10) break;
+    }
+
+    return fit.b + yy;
+  }
+
+  struct RadiusSort
+  {
+    const std::vector<FullTrackVertexer::HitPoint>* pts;
+    explicit RadiusSort(const std::vector<FullTrackVertexer::HitPoint>* p) : pts(p) {}
+    bool operator()(unsigned int a, unsigned int b) const
+    {
+      const FullTrackVertexer::HitPoint& pa = (*pts)[a];
+      const FullTrackVertexer::HitPoint& pb = (*pts)[b];
+      if (pa.radius != pb.radius) return pa.radius < pb.radius;
+      return pa.tbin < pb.tbin;
+    }
+  };
+
+  struct VertexFit
+  {
+    bool ok {false};
+    bool use_sagitta {false};
+    double d0 {0.0};
+    double timebin0 {0.0};
+    double phi_slope {0.0};
+    double phi_intercept {0.0};
+    double tbin_slope {0.0};
+    double tbin_intercept {0.0};
+    Fitter::SagittaFit phi_sagitta;
+  };
+
+  struct CollisionTrack
+  {
+    VertexFit fit;
+    unsigned int nlayers {0};
+  };
+
+  struct CollisionFit
+  {
+    bool ok {false};
+    double radius {0.0};
+    double phi {0.0};
+    double timebin {0.0};
+    double timebin_rms {0.0};
+    unsigned int ntracks {0};
+  };
+
+  unsigned int count_unique_layers(const std::vector<FullTrackVertexer::HitPoint>& pts)
+  {
+    std::vector<unsigned int> layers;
+    layers.reserve(pts.size());
+    for (const auto& p : pts)
+    {
+      if (p.ok) layers.push_back(p.layer);
+    }
+    std::sort(layers.begin(), layers.end());
+    layers.erase(std::unique(layers.begin(), layers.end()), layers.end());
+    return static_cast<unsigned int>(layers.size());
+  }
+
+  VertexFit fit_vertex_points(const std::vector<FullTrackVertexer::HitPoint>& pts,
+                              const bool use_sagitta,
+                              const double weight_power,
+                              const double weight_floor_frac)
+  {
+    VertexFit result;
+    if (pts.size() < 2) return result;
+
+    std::vector<unsigned int> order;
+    order.reserve(pts.size());
+    for (unsigned int i = 0; i < pts.size(); ++i) order.push_back(i);
+    std::sort(order.begin(), order.end(), RadiusSort(&pts));
+
+    double max_adc = 0.0;
+    for (const auto& p : pts) max_adc = std::max(max_adc, static_cast<double>(p.adc));
+    if (max_adc <= 0.0) max_adc = 1.0;
+
+    std::vector<Fitter::FitPoint> radius_phi_points;
+    std::vector<Fitter::FitPoint> radius_tbin_points;
+    radius_phi_points.reserve(pts.size());
+    radius_tbin_points.reserve(pts.size());
+
+    bool first = true;
+    double phi_reference = 0.0;
+    for (unsigned int io = 0; io < order.size(); ++io)
+    {
+      const FullTrackVertexer::HitPoint& p = pts[order[io]];
+      if (!is_good_number(p.radius) || !is_good_number(p.global_phi)) continue;
+
+      double phi = p.global_phi;
+      if (first)
+      {
+        phi_reference = phi;
+        first = false;
+      }
+      else
+      {
+        phi = unwrap_phi_near(phi, phi_reference);
+        phi_reference = phi;
+      }
+
+      const double w = Fitter::adcWeight(static_cast<double>(p.adc), max_adc,
+                                         weight_power, weight_floor_frac);
+      radius_phi_points.emplace_back(p.radius, phi, w);
+      radius_tbin_points.emplace_back(p.radius, static_cast<double>(p.tbin), w);
+    }
+
+    if (radius_phi_points.size() < 2 || radius_tbin_points.size() < 2) return result;
+
+    const Fitter::LineFit phi_line = Fitter::fitLine(radius_phi_points);
+    const Fitter::LineFit tbin_line = Fitter::fitLine(radius_tbin_points);
+    if (!phi_line.ok || !tbin_line.ok) return result;
+
+    result.d0 = phi_line.intercept;
+    result.timebin0 = tbin_line.intercept;
+    result.phi_slope = phi_line.slope;
+    result.phi_intercept = phi_line.intercept;
+    result.tbin_slope = tbin_line.slope;
+    result.tbin_intercept = tbin_line.intercept;
+
+    if (use_sagitta && radius_phi_points.size() >= 3)
+    {
+      result.phi_sagitta = Fitter::fitSagitta(radius_phi_points);
+      result.use_sagitta = result.phi_sagitta.ok;
+      if (result.use_sagitta) result.d0 = sagitta_phi_at_radius(0.0, result.phi_sagitta);
+    }
+
+    if (!is_good_number(result.d0) || !is_good_number(result.timebin0)) return result;
+    result.d0 = wrap_phi(result.d0);
+    result.ok = true;
+    return result;
+  }
+
+  double phi_at_radius(const VertexFit& fit, const double radius)
+  {
+    return fit.use_sagitta ? sagitta_phi_at_radius(radius, fit.phi_sagitta)
+                           : fit.phi_slope * radius + fit.phi_intercept;
+  }
+
+  CollisionFit fit_collision_point(const std::vector<CollisionTrack>& tracks)
+  {
+    CollisionFit result;
+    if (tracks.size() < 2) return result;
+
+    double s_mm = 0.0;
+    double s_mt = 0.0;
+    double s_tt = 0.0;
+    double rhs_r = 0.0;
+    double rhs_t = 0.0;
+
+    for (const auto& trk : tracks)
+    {
+      const double w = static_cast<double>(trk.nlayers);
+      const double m = trk.fit.tbin_slope;
+      const double b = trk.fit.tbin_intercept;
+      s_mm += w * m * m;
+      s_mt -= w * m;
+      s_tt += w;
+      rhs_r -= w * m * b;
+      rhs_t += w * b;
+    }
+
+    const double det = s_mm * s_tt - s_mt * s_mt;
+    if (std::fabs(det) < 1.0e-12) return result;
+
+    result.radius = (rhs_r * s_tt - s_mt * rhs_t) / det;
+    result.timebin = (s_mm * rhs_t - s_mt * rhs_r) / det;
+    if (!is_good_number(result.radius) || !is_good_number(result.timebin)) return result;
+
+    double sum_w = 0.0;
+    double sum_res2 = 0.0;
+    double sum_sin = 0.0;
+    double sum_cos = 0.0;
+    for (const auto& trk : tracks)
+    {
+      const double w = static_cast<double>(trk.nlayers);
+      const double tpred = trk.fit.tbin_slope * result.radius + trk.fit.tbin_intercept;
+      const double residual = tpred - result.timebin;
+      const double phi = wrap_phi(phi_at_radius(trk.fit, result.radius));
+      sum_w += w;
+      sum_res2 += w * residual * residual;
+      sum_sin += w * std::sin(phi);
+      sum_cos += w * std::cos(phi);
+    }
+
+    if (sum_w <= 0.0 || (sum_sin == 0.0 && sum_cos == 0.0)) return result;
+    result.phi = wrap_phi(std::atan2(sum_sin, sum_cos));
+    result.timebin_rms = std::sqrt(sum_res2 / sum_w);
+    result.ntracks = static_cast<unsigned int>(tracks.size());
+    result.ok = true;
+    return result;
+  }
 }
 
-FullTrackVertexer::TrackInfo::TrackInfo() :
-  index(0),
-  track_id(0),
-  side(0),
-  first_layer(0),
-  last_layer(0),
-  nrawhits(0),
-  phi_slope(0.0),
-  phi_intercept(0.0),
-  tbin_slope(0.0),
-  tbin_intercept(0.0),
-  chi2_phi_ndf(0.0),
-  chi2_tbin_ndf(0.0)
-{
-}
-
-FullTrackVertexer::PairVertex::PairVertex() :
-  i(0),
-  j(0),
-  side(0),
-  r_phi(0.0),
-  phi(0.0),
-  x(0.0),
-  y(0.0),
-  r_tbin(0.0),
-  tbin(0.0),
-  residual_rphi(0.0),
-  residual_tbin(0.0),
-  weight(1.0)
-{
-}
-
-FullTrackVertexer::FullTrackVertexer(const std::string& name,
-                                     const std::string& filename)
+FullTrackVertexer::FullTrackVertexer(const std::string& name)
   : SubsysReco(name)
-  , m_outputFileName(filename)
   , m_inputNodeName("FULLTRACKS")
-  , m_outputFile(nullptr)
-  , m_tree(nullptr)
-  , m_fullTrackContainer(nullptr)
-  , m_event(0)
-  , m_min_layers(16)
-  , m_min_rawhits(25)
-  , m_max_chi2_phi_ndf(100.0)
-  , m_max_chi2_tbin_ndf(100.0)
-  , m_min_slope_diff_phi(1.0e-6)
-  , m_min_slope_diff_tbin(1.0e-6)
-  , m_min_vertex_r(-30.0)
-  , m_max_vertex_r(30.0)
-  , m_max_pair_dtbin(150.0)
-  , m_max_residual_rphi(2.0)
-  , m_max_residual_tbin(80.0)
-  , m_max_track_dca_rphi(1.5)
-  , m_max_track_dca_tbin(50.0)
-  , m_vertex_timebin_gap(20.0)
-  , m_min_pairs_per_vertex(5)
-  , m_tree_event(0)
-  , m_tree_ntracks_input(0)
-  , m_tree_ntracks_used(0)
-  , m_tree_npairs(0)
-  , m_tree_npairs_used(0)
-  , m_tree_vertex_side(0)
-  , m_tree_vertex_x(0.0)
-  , m_tree_vertex_y(0.0)
-  , m_tree_vertex_r(0.0)
-  , m_tree_vertex_phi(0.0)
-  , m_tree_vertex_tbin(0.0)
-  , m_tree_vertex_quality(0.0)
+  , m_outputNodeName("FULLTRACKVERTICES")
+  , m_fullTracks(nullptr)
+  , m_vertices(nullptr)
+  , m_hits(nullptr)
+  , m_idealPadMap(nullptr)
+  , m_fitWeightPower(1.0)
+  , m_fitWeightFloorFrac(0.05)
+  , m_useSagittaPhiFit(true)
+  , m_collisionMinTrackLayers(10)
 {
 }
 
 FullTrackVertexer::~FullTrackVertexer()
 {
-  if (m_outputFile)
-  {
-    delete m_outputFile;
-    m_outputFile = nullptr;
-  }
-}
-
-int FullTrackVertexer::Init(PHCompositeNode*)
-{
-  m_outputFile = new TFile(m_outputFileName.c_str(), "RECREATE");
-  if (!m_outputFile || m_outputFile->IsZombie())
-  {
-    std::cerr << Name() << "::Init - cannot create " << m_outputFileName << std::endl;
-    return Fun4AllReturnCodes::ABORTRUN;
-  }
-
-  m_tree = new TTree("FullTrackVertex", "TPC full-track pair vertex QA");
-  m_tree->Branch("event", &m_tree_event, "event/I");
-  m_tree->Branch("ntracks_input", &m_tree_ntracks_input, "ntracks_input/i");
-  m_tree->Branch("ntracks_used", &m_tree_ntracks_used, "ntracks_used/i");
-  m_tree->Branch("npairs", &m_tree_npairs, "npairs/i");
-  m_tree->Branch("npairs_used", &m_tree_npairs_used, "npairs_used/i");
-  m_tree->Branch("vertex_side", &m_tree_vertex_side, "vertex_side/I");
-  m_tree->Branch("vertex_x", &m_tree_vertex_x, "vertex_x/D");
-  m_tree->Branch("vertex_y", &m_tree_vertex_y, "vertex_y/D");
-  m_tree->Branch("vertex_r", &m_tree_vertex_r, "vertex_r/D");
-  m_tree->Branch("vertex_phi", &m_tree_vertex_phi, "vertex_phi/D");
-  m_tree->Branch("vertex_tbin", &m_tree_vertex_tbin, "vertex_tbin/D");
-  m_tree->Branch("vertex_quality", &m_tree_vertex_quality, "vertex_quality/D");
-
-  // All vertices found in this event after clustering pair candidates in tbin.
-  m_tree->Branch("all_vertex_side", &m_tree_all_vertex_side);
-  m_tree->Branch("all_vertex_x", &m_tree_all_vertex_x);
-  m_tree->Branch("all_vertex_y", &m_tree_all_vertex_y);
-  m_tree->Branch("all_vertex_r", &m_tree_all_vertex_r);
-  m_tree->Branch("all_vertex_phi", &m_tree_all_vertex_phi);
-  m_tree->Branch("all_vertex_tbin", &m_tree_all_vertex_tbin);
-  m_tree->Branch("all_vertex_quality", &m_tree_all_vertex_quality);
-  m_tree->Branch("all_vertex_npairs", &m_tree_all_vertex_npairs);
-  m_tree->Branch("all_vertex_ntracks_assigned", &m_tree_all_vertex_ntracks_assigned);
-
-  m_tree->Branch("pair_side", &m_tree_pair_side);
-  m_tree->Branch("pair_i", &m_tree_pair_i);
-  m_tree->Branch("pair_j", &m_tree_pair_j);
-  m_tree->Branch("pair_r_phi", &m_tree_pair_r_phi);
-  m_tree->Branch("pair_phi", &m_tree_pair_phi);
-  m_tree->Branch("pair_x", &m_tree_pair_x);
-  m_tree->Branch("pair_y", &m_tree_pair_y);
-  m_tree->Branch("pair_r_tbin", &m_tree_pair_r_tbin);
-  m_tree->Branch("pair_tbin", &m_tree_pair_tbin);
-  m_tree->Branch("pair_residual_rphi", &m_tree_pair_residual_rphi);
-  m_tree->Branch("pair_residual_tbin", &m_tree_pair_residual_tbin);
-  m_tree->Branch("pair_weight", &m_tree_pair_weight);
-
-  return Fun4AllReturnCodes::EVENT_OK;
+  delete m_idealPadMap;
+  m_idealPadMap = nullptr;
 }
 
 int FullTrackVertexer::InitRun(PHCompositeNode* topNode)
 {
-  if (getNodes(topNode) != Fun4AllReturnCodes::EVENT_OK) return Fun4AllReturnCodes::ABORTRUN;
-  m_event = 0;
-  return Fun4AllReturnCodes::EVENT_OK;
-}
+  if (!createNodes(topNode)) return Fun4AllReturnCodes::ABORTRUN;
 
-int FullTrackVertexer::End(PHCompositeNode*)
-{
-  if (m_outputFile)
+  delete m_idealPadMap;
+  m_idealPadMap = new IdealPadMap();
+  if (m_idealPadMap->load_from_cdb(Verbosity()) != 0 || !m_idealPadMap->is_loaded())
   {
-    m_outputFile->cd();
-    if (m_tree) m_tree->Write();
-    m_outputFile->Close();
-    delete m_outputFile;
-    m_outputFile = nullptr;
-  }
-  return Fun4AllReturnCodes::EVENT_OK;
-}
-
-int FullTrackVertexer::getNodes(PHCompositeNode* topNode)
-{
-  m_fullTrackContainer = findNode::getClass<FullTrackContainer>(topNode, m_inputNodeName);
-  if (!m_fullTrackContainer)
-  {
-    std::cerr << Name() << "::getNodes - missing " << m_inputNodeName << std::endl;
+    std::cerr << Name() << "::InitRun - cannot load IdealPadMap from CDB" << std::endl;
     return Fun4AllReturnCodes::ABORTRUN;
   }
+
   return Fun4AllReturnCodes::EVENT_OK;
 }
 
-void FullTrackVertexer::reset_tree_vars()
+bool FullTrackVertexer::getNodes(PHCompositeNode* topNode)
 {
-  m_tree_event = m_event;
-  m_tree_ntracks_input = 0;
-  m_tree_ntracks_used = 0;
-  m_tree_npairs = 0;
-  m_tree_npairs_used = 0;
-  m_tree_vertex_side = 0;
-  m_tree_vertex_x = 0.0;
-  m_tree_vertex_y = 0.0;
-  m_tree_vertex_r = 0.0;
-  m_tree_vertex_phi = 0.0;
-  m_tree_vertex_tbin = 0.0;
-  m_tree_vertex_quality = 0.0;
+  m_fullTracks = findNode::getClass<FullTrackContainer>(topNode, m_inputNodeName.c_str());
+  if (!m_fullTracks)
+  {
+    const char* candidate_names[] = {
+      "FULLTRACKS",
+      "FullTracks",
+      "FullTrackContainer",
+      "FULLTRACKCONTAINER",
+      "FULLTRACKS_CONTAINER"
+    };
 
-  m_tree_all_vertex_side.clear();
-  m_tree_all_vertex_x.clear();
-  m_tree_all_vertex_y.clear();
-  m_tree_all_vertex_r.clear();
-  m_tree_all_vertex_phi.clear();
-  m_tree_all_vertex_tbin.clear();
-  m_tree_all_vertex_quality.clear();
-  m_tree_all_vertex_npairs.clear();
-  m_tree_all_vertex_ntracks_assigned.clear();
+    for (unsigned int i = 0;
+         i < sizeof(candidate_names) / sizeof(candidate_names[0]) && !m_fullTracks;
+         ++i)
+    {
+      m_fullTracks = findNode::getClass<FullTrackContainer>(topNode, candidate_names[i]);
+      if (m_fullTracks) m_inputNodeName = candidate_names[i];
+    }
+  }
 
-  m_tree_pair_side.clear();
-  m_tree_pair_i.clear();
-  m_tree_pair_j.clear();
-  m_tree_pair_r_phi.clear();
-  m_tree_pair_phi.clear();
-  m_tree_pair_x.clear();
-  m_tree_pair_y.clear();
-  m_tree_pair_r_tbin.clear();
-  m_tree_pair_tbin.clear();
-  m_tree_pair_residual_rphi.clear();
-  m_tree_pair_residual_tbin.clear();
-  m_tree_pair_weight.clear();
-}
+  if (!m_fullTracks)
+  {
+    std::cerr << Name() << "::getNodes - missing FullTrackContainer node" << std::endl;
+    return false;
+  }
 
-bool FullTrackVertexer::make_track_info(unsigned int index, TrackInfo& t) const
-{
-  const FullTrack* trk = m_fullTrackContainer->get_track(index);
-  if (!trk || !trk->isValid()) return false;
-
-  if (trk->get_last_layer() < trk->get_first_layer()) return false;
-  const unsigned int nlayers = trk->get_last_layer() - trk->get_first_layer() + 1;
-  if (nlayers < m_min_layers) return false;
-  if (trk->get_nrawhits() < m_min_rawhits) return false;
-
-  const int ndof_phi = trk->get_ndof_phi();
-  const int ndof_tbin = trk->get_ndof_tbin();
-  const double chi2_phi_ndf = (ndof_phi > 0) ? trk->get_chi2_phi() / static_cast<double>(ndof_phi) : 0.0;
-  const double chi2_tbin_ndf = (ndof_tbin > 0) ? trk->get_chi2_tbin() / static_cast<double>(ndof_tbin) : 0.0;
-
-  if (chi2_phi_ndf > m_max_chi2_phi_ndf) return false;
-  if (chi2_tbin_ndf > m_max_chi2_tbin_ndf) return false;
-
-  t.index = index;
-  t.track_id = trk->get_track_id();
-  t.side = trk->get_side();
-  t.first_layer = trk->get_first_layer();
-  t.last_layer = trk->get_last_layer();
-  t.nrawhits = trk->get_nrawhits();
-  t.phi_slope = trk->get_phi_slope();
-  t.phi_intercept = trk->get_phi_intercept();
-  t.tbin_slope = trk->get_tbin_slope();
-  t.tbin_intercept = trk->get_tbin_intercept();
-  t.chi2_phi_ndf = chi2_phi_ndf;
-  t.chi2_tbin_ndf = chi2_tbin_ndf;
-
-  if (!finite_number(t.phi_slope) || !finite_number(t.phi_intercept)) return false;
-  if (!finite_number(t.tbin_slope) || !finite_number(t.tbin_intercept)) return false;
+  m_hits = findNode::getClass<TrkrHitSetContainer>(topNode, "TRKR_HITSET");
+  if (!m_hits)
+  {
+    std::cerr << Name() << "::getNodes - missing TRKR_HITSET" << std::endl;
+    return false;
+  }
 
   return true;
 }
 
-bool FullTrackVertexer::make_pair_vertex(const TrackInfo& a,
-                                         const TrackInfo& b,
-                                         PairVertex& pv) const
+bool FullTrackVertexer::createNodes(PHCompositeNode* topNode)
 {
-  if (a.index == b.index) return false;
+  PHNodeIterator iter(topNode);
+  PHCompositeNode* dstNode = dynamic_cast<PHCompositeNode*>(iter.findFirst("PHCompositeNode", "DST"));
+  if (!dstNode)
+  {
+    dstNode = new PHCompositeNode("DST");
+    topNode->addNode(dstNode);
+  }
 
-  // Vertex finding is independent for the two TPC sides.
-  // Do not form South-North mixed pairs.
-  if (a.side != b.side) return false;
-
-  // If the tracks are almost parallel in either projection, the pair vertex is unstable.
-  const double dphi_slope = a.phi_slope - b.phi_slope;
-  const double dtbin_slope = a.tbin_slope - b.tbin_slope;
-  if (std::fabs(dphi_slope) < m_min_slope_diff_phi) return false;
-  if (std::fabs(dtbin_slope) < m_min_slope_diff_tbin) return false;
-
-  // The full-track fit is phi(r) and tbin(r).  For each pair, find the
-  // intersection separately in the r-phi and r-tbin projections.
-  double b_phi_intercept = b.phi_intercept;
-  b_phi_intercept = unwrap_phi_to_reference(b_phi_intercept, a.phi_intercept);
-
-  const double r_phi = (b_phi_intercept - a.phi_intercept) / dphi_slope;
-  const double phi_a = a.phi_slope * r_phi + a.phi_intercept;
-  const double phi_b = b.phi_slope * r_phi + b_phi_intercept;
-  const double phi = 0.5 * (phi_a + unwrap_phi_to_reference(phi_b, phi_a));
-
-  const double r_tbin = (b.tbin_intercept - a.tbin_intercept) / dtbin_slope;
-  const double tbin_a = a.tbin_slope * r_tbin + a.tbin_intercept;
-  const double tbin_b = b.tbin_slope * r_tbin + b.tbin_intercept;
-  const double tbin = 0.5 * (tbin_a + tbin_b);
-
-  if (!finite_number(r_phi) || !finite_number(phi)) return false;
-  if (!finite_number(r_tbin) || !finite_number(tbin)) return false;
-
-  if (r_phi < m_min_vertex_r || r_phi > m_max_vertex_r) return false;
-  if (r_tbin < m_min_vertex_r || r_tbin > m_max_vertex_r) return false;
-  if (std::fabs(tbin_a - tbin_b) > m_max_pair_dtbin) return false;
-
-  pv.i = a.index;
-  pv.j = b.index;
-  pv.side = a.side;
-  pv.r_phi = r_phi;
-  pv.phi = wrap_to_pi(phi);
-  pv.x = r_phi * std::cos(pv.phi);
-  pv.y = r_phi * std::sin(pv.phi);
-  pv.r_tbin = r_tbin;
-  pv.tbin = tbin;
-
-  // Symmetric residuals around the 2-projection pair point.  These are useful
-  // for outlier removal and QA.
-  const double r_common = 0.5 * (r_phi + r_tbin);
-  const double yphi_a = a.phi_slope * r_common + a.phi_intercept;
-  const double yphi_b = b.phi_slope * r_common + b_phi_intercept;
-  const double dtbin_a2 = a.tbin_slope * r_common + a.tbin_intercept;
-  const double dtbin_b2 = b.tbin_slope * r_common + b.tbin_intercept;
-
-  pv.residual_rphi = std::fabs(r_common * (yphi_a - unwrap_phi_to_reference(yphi_b, yphi_a)));
-  pv.residual_tbin = std::fabs(dtbin_a2 - dtbin_b2);
-
-  if (pv.residual_rphi > m_max_residual_rphi) return false;
-  if (pv.residual_tbin > m_max_residual_tbin) return false;
-
-  const double w_hits = std::sqrt(static_cast<double>(a.nrawhits) * static_cast<double>(b.nrawhits));
-  const double w_chi2 = 1.0 / (1.0 + a.chi2_phi_ndf + b.chi2_phi_ndf + a.chi2_tbin_ndf + b.chi2_tbin_ndf);
-  pv.weight = (w_hits > 0.0) ? w_hits * w_chi2 : w_chi2;
-  if (!finite_number(pv.weight) || pv.weight <= 0.0) pv.weight = 1.0;
+  m_vertices = findNode::getClass<FullTrackVertexContainer>(topNode, m_outputNodeName.c_str());
+  if (!m_vertices)
+  {
+    m_vertices = new FullTrackVertexContainerv1();
+    PHIODataNode<PHObject>* node = new PHIODataNode<PHObject>(m_vertices, m_outputNodeName, "PHObject");
+    dstNode->addNode(node);
+    std::cout << Name() << "::createNodes - created " << m_outputNodeName << " node" << std::endl;
+  }
 
   return true;
 }
 
-double FullTrackVertexer::median(std::vector<double> v) const
+int FullTrackVertexer::process_event(PHCompositeNode* topNode)
 {
-  if (v.empty()) return 0.0;
-  std::sort(v.begin(), v.end());
-  const unsigned int n = static_cast<unsigned int>(v.size());
-  if (n % 2) return v[n / 2];
-  return 0.5 * (v[n / 2 - 1] + v[n / 2]);
-}
-
-double FullTrackVertexer::weighted_rms(const std::vector<double>& v,
-                                       const double center) const
-{
-  if (v.empty()) return 0.0;
-  double sum = 0.0;
-  for (unsigned int i = 0; i < v.size(); ++i) sum += sqr(v[i] - center);
-  return std::sqrt(sum / static_cast<double>(v.size()));
-}
-
-bool FullTrackVertexer::calculate_event_vertex(const std::vector<PairVertex>& pairs,
-                                               double& vx,
-                                               double& vy,
-                                               double& vr,
-                                               double& vphi,
-                                               double& vtbin,
-                                               double& vquality,
-                                               unsigned int& nused_pairs) const
-{
-  vx = 0.0;
-  vy = 0.0;
-  vr = 0.0;
-  vphi = 0.0;
-  vtbin = 0.0;
-  vquality = 0.0;
-  nused_pairs = 0;
-
-  if (pairs.empty()) return false;
-
-  std::vector<double> xs;
-  std::vector<double> ys;
-  std::vector<double> rs;
-  std::vector<double> tbins;
-  xs.reserve(pairs.size());
-  ys.reserve(pairs.size());
-  rs.reserve(pairs.size());
-  tbins.reserve(pairs.size());
-
-  for (unsigned int i = 0; i < pairs.size(); ++i)
+  if (!m_fullTracks || !m_hits || !m_vertices)
   {
-    xs.push_back(pairs[i].x);
-    ys.push_back(pairs[i].y);
-    rs.push_back(pairs[i].r_phi);
-    tbins.push_back(pairs[i].tbin);
+    if (!getNodes(topNode) || !createNodes(topNode)) return Fun4AllReturnCodes::EVENT_OK;
   }
 
-  // Robust first pass: median pair vertex.
-  const double x0 = median(xs);
-  const double y0 = median(ys);
-  const double tbin0 = median(tbins);
-  const double sx = weighted_rms(xs, x0);
-  const double sy = weighted_rms(ys, y0);
-  const double st = weighted_rms(tbins, tbin0);
-
-  double sw = 0.0;
-  double swx = 0.0;
-  double swy = 0.0;
-  double swt = 0.0;
-
-  for (unsigned int i = 0; i < pairs.size(); ++i)
+  if (!m_idealPadMap || !m_idealPadMap->is_loaded())
   {
-    const double dx = pairs[i].x - x0;
-    const double dy = pairs[i].y - y0;
-    const double dt = pairs[i].tbin - tbin0;
-
-    if (sx > 0.0 && std::fabs(dx) > 3.0 * sx) continue;
-    if (sy > 0.0 && std::fabs(dy) > 3.0 * sy) continue;
-    if (st > 0.0 && std::fabs(dt) > 3.0 * st) continue;
-
-    const double w = pairs[i].weight;
-    sw += w;
-    swx += w * pairs[i].x;
-    swy += w * pairs[i].y;
-    swt += w * pairs[i].tbin;
-    ++nused_pairs;
-  }
-
-  if (sw <= 0.0 || nused_pairs == 0) return false;
-
-  vx = swx / sw;
-  vy = swy / sw;
-  vtbin = swt / sw;
-  vr = std::sqrt(vx * vx + vy * vy);
-  vphi = wrap_to_pi(std::atan2(vy, vx));
-
-  double chi2 = 0.0;
-  for (unsigned int i = 0; i < pairs.size(); ++i)
-  {
-    const double dx = pairs[i].x - vx;
-    const double dy = pairs[i].y - vy;
-    const double dt = pairs[i].tbin - vtbin;
-    chi2 += dx * dx + dy * dy + 0.01 * dt * dt;
-  }
-  vquality = std::sqrt(chi2 / static_cast<double>(pairs.size()));
-
-  return true;
-}
-
-int FullTrackVertexer::process_event(PHCompositeNode*)
-{
-  reset_tree_vars();
-
-  if (!m_fullTrackContainer)
-  {
-    if (m_tree) m_tree->Fill();
-    ++m_event;
+    std::cerr << Name() << "::process_event - IdealPadMap is not loaded" << std::endl;
     return Fun4AllReturnCodes::EVENT_OK;
   }
 
-  const unsigned int ntracks = m_fullTrackContainer->size();
-  m_tree_ntracks_input = ntracks;
+  m_vertices->Reset();
 
-  std::vector<TrackInfo> tracks;
-  tracks.reserve(ntracks);
-  for (unsigned int i = 0; i < ntracks; ++i)
+  std::vector<CollisionTrack> collision_tracks;
+
+  const unsigned int ntracks = m_fullTracks ? m_fullTracks->size() : 0;
+  for (unsigned int itrk = 0; itrk < ntracks; ++itrk)
   {
-    TrackInfo t;
-    if (make_track_info(i, t)) tracks.push_back(t);
-  }
-  m_tree_ntracks_used = static_cast<unsigned int>(tracks.size());
-
-  std::vector<PairVertex> pairs;
-  for (unsigned int i = 0; i < tracks.size(); ++i)
-  {
-    for (unsigned int j = i + 1; j < tracks.size(); ++j)
-    {
-      PairVertex pv;
-      if (!make_pair_vertex(tracks[i], tracks[j], pv)) continue;
-
-      pairs.push_back(pv);
-
-      m_tree_pair_side.push_back(pv.side);
-      m_tree_pair_i.push_back(pv.i);
-      m_tree_pair_j.push_back(pv.j);
-      m_tree_pair_r_phi.push_back(pv.r_phi);
-      m_tree_pair_phi.push_back(pv.phi);
-      m_tree_pair_x.push_back(pv.x);
-      m_tree_pair_y.push_back(pv.y);
-      m_tree_pair_r_tbin.push_back(pv.r_tbin);
-      m_tree_pair_tbin.push_back(pv.tbin);
-      m_tree_pair_residual_rphi.push_back(pv.residual_rphi);
-      m_tree_pair_residual_tbin.push_back(pv.residual_tbin);
-      m_tree_pair_weight.push_back(pv.weight);
-    }
-  }
-
-  m_tree_npairs = static_cast<unsigned int>(pairs.size());
-
-  // Clear vertices first. Tracks will be assigned to the best same-side,
-  // same-timebin vertex found from their pair cluster.
-  for (unsigned int i = 0; i < ntracks; ++i)
-  {
-    FullTrack* trk = m_fullTrackContainer->get_track(i);
+    const FullTrack* trk = m_fullTracks->get_track(itrk);
     if (!trk) continue;
-    trk->set_vertex_valid(0);
-    trk->set_vertex_x(0.0);
-    trk->set_vertex_y(0.0);
-    trk->set_vertex_r(0.0);
-    trk->set_vertex_phi(0.0);
-    trk->set_vertex_tbin(0.0);
-    trk->set_vertex_npairs(0);
-    trk->set_vertex_quality(0.0);
+
+    std::vector<HitPoint> pts;
+    pts.reserve(trk->size_hit_indices());
+    for (unsigned int ih = 0; ih < trk->size_hit_indices(); ++ih)
+    {
+      const FullTrack::HitIndex idx = trk->get_hit_index(ih);
+      const HitPoint p = make_hit_point(idx.first, idx.second);
+      if (p.ok) pts.push_back(p);
+    }
+
+    const VertexFit fit = fit_vertex_points(pts, m_useSagittaPhiFit,
+                                            m_fitWeightPower, m_fitWeightFloorFrac);
+    if (!fit.ok) continue;
+
+    FullTrackVertexv1* out = new FullTrackVertexv1();
+    out->set_track_id(trk->get_track_id());
+    out->set_d0(fit.d0);
+    out->set_timebin0(fit.timebin0);
+    m_vertices->add_vertex(out);
+
+    const unsigned int nlayers = count_unique_layers(pts);
+    if (nlayers >= m_collisionMinTrackLayers)
+    {
+      CollisionTrack accepted;
+      accepted.fit = fit;
+      accepted.nlayers = nlayers;
+      collision_tracks.push_back(accepted);
+    }
   }
 
-  std::vector<double> best_track_dtbin(ntracks, std::numeric_limits<double>::max());
-
-  // Do the vertex determination independently for each TPC side.
-  // This avoids South/North mixed pairs and allows separate timebin clusters
-  // on each side.
-  std::sort(pairs.begin(), pairs.end(), [](const PairVertex& a, const PairVertex& b) {
-    if (a.side != b.side) return a.side < b.side;
-    return a.tbin < b.tbin;
-  });
-
-  bool any_vertex_ok = false;
-  unsigned int best_vertex_index = 0;
-  unsigned int best_vertex_npairs = 0;
-
-  unsigned int ip = 0;
-  while (ip < pairs.size())
+  const CollisionFit collision = fit_collision_point(collision_tracks);
+  m_vertices->set_collision_min_layers(m_collisionMinTrackLayers);
+  m_vertices->set_collision_ntracks(collision.ntracks);
+  if (collision.ok)
   {
-    const int side = pairs[ip].side;
-
-    std::vector<PairVertex> side_pairs;
-    while (ip < pairs.size() && pairs[ip].side == side)
-    {
-      side_pairs.push_back(pairs[ip]);
-      ++ip;
-    }
-
-    std::vector<std::vector<PairVertex> > pair_clusters;
-    for (unsigned int is = 0; is < side_pairs.size(); ++is)
-    {
-      if (pair_clusters.empty())
-      {
-        pair_clusters.push_back(std::vector<PairVertex>());
-        pair_clusters.back().push_back(side_pairs[is]);
-        continue;
-      }
-
-      // Running mean is more stable than comparing only to the previous pair.
-      double mean_tbin = 0.0;
-      for (unsigned int j = 0; j < pair_clusters.back().size(); ++j) mean_tbin += pair_clusters.back()[j].tbin;
-      mean_tbin /= static_cast<double>(pair_clusters.back().size());
-
-      if (std::fabs(side_pairs[is].tbin - mean_tbin) > m_vertex_timebin_gap)
-      {
-        pair_clusters.push_back(std::vector<PairVertex>());
-      }
-      pair_clusters.back().push_back(side_pairs[is]);
-    }
-
-    for (unsigned int ic = 0; ic < pair_clusters.size(); ++ic)
-    {
-      if (pair_clusters[ic].size() < m_min_pairs_per_vertex) continue;
-
-      double vx = 0.0;
-      double vy = 0.0;
-      double vr = 0.0;
-      double vphi = 0.0;
-      double vtbin = 0.0;
-      double vquality = 0.0;
-      unsigned int nused_pairs = 0;
-
-      const bool ok = calculate_event_vertex(pair_clusters[ic], vx, vy, vr, vphi, vtbin, vquality, nused_pairs);
-      if (!ok || nused_pairs < m_min_pairs_per_vertex) continue;
-
-      any_vertex_ok = true;
-
-      m_tree_all_vertex_side.push_back(side);
-      m_tree_all_vertex_x.push_back(vx);
-      m_tree_all_vertex_y.push_back(vy);
-      m_tree_all_vertex_r.push_back(vr);
-      m_tree_all_vertex_phi.push_back(vphi);
-      m_tree_all_vertex_tbin.push_back(vtbin);
-      m_tree_all_vertex_quality.push_back(vquality);
-      m_tree_all_vertex_npairs.push_back(nused_pairs);
-      m_tree_all_vertex_ntracks_assigned.push_back(0);
-      const unsigned int this_vertex_index = static_cast<unsigned int>(m_tree_all_vertex_npairs.size() - 1);
-
-      if (nused_pairs > best_vertex_npairs)
-      {
-        best_vertex_npairs = nused_pairs;
-        best_vertex_index = static_cast<unsigned int>(m_tree_all_vertex_npairs.size() - 1);
-      }
-
-      // Assign this same-side vertex only to tracks that participated in this
-      // same-side tbin cluster. If a track appears in more than one cluster,
-      // keep the closest one in tbin.
-      std::set<unsigned int> cluster_track_indices;
-      for (unsigned int jp = 0; jp < pair_clusters[ic].size(); ++jp)
-      {
-        cluster_track_indices.insert(pair_clusters[ic][jp].i);
-        cluster_track_indices.insert(pair_clusters[ic][jp].j);
-      }
-
-      for (std::set<unsigned int>::const_iterator it = cluster_track_indices.begin();
-           it != cluster_track_indices.end(); ++it)
-      {
-        const unsigned int idx = *it;
-        if (idx >= ntracks) continue;
-
-        FullTrack* trk = m_fullTrackContainer->get_track(idx);
-        if (!trk) continue;
-        if (trk->get_side() != side) continue;
-
-        const double track_phi_at_vtx = trk->get_phi_slope() * vr + trk->get_phi_intercept();
-        const double dphi = wrap_to_pi(track_phi_at_vtx - vphi);
-        const double dca_rphi = std::fabs(vr * dphi);
-
-        const double track_tbin_at_vtx = trk->get_tbin_slope() * vr + trk->get_tbin_intercept();
-        const double dt = std::fabs(track_tbin_at_vtx - vtbin);
-
-        // Tight DCA-like track-to-vertex requirement. This prevents a broad
-        // time cluster from assigning unrelated tracks to the vertex.
-        if (dca_rphi > m_max_track_dca_rphi) continue;
-        if (dt > m_max_track_dca_tbin) continue;
-
-        if (dt > best_track_dtbin[idx]) continue;
-
-        if (!trk->get_vertex_valid() && this_vertex_index < m_tree_all_vertex_ntracks_assigned.size())
-        {
-          ++m_tree_all_vertex_ntracks_assigned[this_vertex_index];
-        }
-
-        best_track_dtbin[idx] = dt;
-        trk->set_vertex_valid(1);
-        trk->set_vertex_x(vx);
-        trk->set_vertex_y(vy);
-        trk->set_vertex_r(vr);
-        trk->set_vertex_phi(vphi);
-        trk->set_vertex_tbin(vtbin);
-        trk->set_vertex_npairs(nused_pairs);
-        trk->set_vertex_quality(vquality);
-      }
-    }
+    m_vertices->set_collision_vertex_valid(1);
+    m_vertices->set_collision_radius(collision.radius);
+    m_vertices->set_collision_phi(collision.phi);
+    m_vertices->set_collision_timebin(collision.timebin);
+    m_vertices->set_collision_timebin_rms(collision.timebin_rms);
   }
-
-  if (any_vertex_ok && best_vertex_index < m_tree_all_vertex_npairs.size())
-  {
-    // Backward-compatible scalar branches: largest/most-populated vertex among
-    // all side/timebin vertices. Vector branches keep all side-separated vertices.
-    m_tree_npairs_used = m_tree_all_vertex_npairs[best_vertex_index];
-    m_tree_vertex_side = m_tree_all_vertex_side[best_vertex_index];
-    m_tree_vertex_x = m_tree_all_vertex_x[best_vertex_index];
-    m_tree_vertex_y = m_tree_all_vertex_y[best_vertex_index];
-    m_tree_vertex_r = m_tree_all_vertex_r[best_vertex_index];
-    m_tree_vertex_phi = m_tree_all_vertex_phi[best_vertex_index];
-    m_tree_vertex_tbin = m_tree_all_vertex_tbin[best_vertex_index];
-    m_tree_vertex_quality = m_tree_all_vertex_quality[best_vertex_index];
-  }
-
-  if (m_tree) m_tree->Fill();
 
   if (Verbosity() > 0)
   {
-    unsigned int nside0 = 0;
-    unsigned int nside1 = 0;
-    unsigned int nside_other = 0;
-    for (unsigned int iv = 0; iv < m_tree_all_vertex_side.size(); ++iv)
-    {
-      if (m_tree_all_vertex_side[iv] == 0) ++nside0;
-      else if (m_tree_all_vertex_side[iv] == 1) ++nside1;
-      else ++nside_other;
-    }
-
-    std::cout << Name() << "::process_event - event " << m_event
-              << " full_tracks=" << ntracks
-              << " used_tracks=" << tracks.size()
-              << " pairs=" << pairs.size()
-              << " nvertices=" << m_tree_all_vertex_npairs.size()
-              << " nvertices_side0=" << nside0
-              << " nvertices_side1=" << nside1
-              << " nvertices_other=" << nside_other
-              << " best_side=" << m_tree_vertex_side
-              << " used_pairs_best=" << m_tree_npairs_used
-              << " vertex_ok=" << any_vertex_ok
-              << " x_best=" << m_tree_vertex_x
-              << " y_best=" << m_tree_vertex_y
-              << " tbin_best=" << m_tree_vertex_tbin
+    std::cout << Name() << "::process_event - input tracks=" << ntracks
+              << " vertices=" << m_vertices->size()
+              << " collision_ntracks=" << m_vertices->get_collision_ntracks()
+              << " collision_radius=" << m_vertices->get_collision_radius()
+              << " collision_phi=" << m_vertices->get_collision_phi()
+              << " collision_timebin=" << m_vertices->get_collision_timebin()
               << std::endl;
-
-    // Print every side/timebin vertex, not only the backward-compatible best one.
-    for (unsigned int iv = 0; iv < m_tree_all_vertex_npairs.size(); ++iv)
-    {
-      std::cout << "  vertex " << iv
-                << " side=" << m_tree_all_vertex_side[iv]
-                << " npairs=" << m_tree_all_vertex_npairs[iv]
-                << " ntracks_assigned=" << ((iv < m_tree_all_vertex_ntracks_assigned.size()) ? m_tree_all_vertex_ntracks_assigned[iv] : 0)
-                << " x=" << m_tree_all_vertex_x[iv]
-                << " y=" << m_tree_all_vertex_y[iv]
-                << " r=" << m_tree_all_vertex_r[iv]
-                << " phi=" << m_tree_all_vertex_phi[iv]
-                << " tbin=" << m_tree_all_vertex_tbin[iv]
-                << " quality=" << m_tree_all_vertex_quality[iv]
-                << std::endl;
-    }
   }
 
-  ++m_event;
   return Fun4AllReturnCodes::EVENT_OK;
+}
+
+FullTrackVertexer::HitPoint
+FullTrackVertexer::make_hit_point(const TrkrDefs::hitsetkey hsk,
+                                  const TrkrDefs::hitkey hk) const
+{
+  HitPoint p;
+
+  TrkrHitSet* hitset = m_hits ? m_hits->findHitSet(hsk) : nullptr;
+  if (!hitset) return p;
+
+  TrkrHit* hit = hitset->getHit(hk);
+  if (!hit) return p;
+
+  p.hitsetkey = hsk;
+  p.hitkey = hk;
+  p.layer = TrkrDefs::getLayer(hsk);
+  p.pad = TpcDefs::getPad(hk);
+  p.tbin = TpcDefs::getTBin(hk);
+  p.adc = hit->getAdc();
+
+  if (p.layer < 7 || p.layer > 54) return p;
+  if (!m_idealPadMap) return p;
+
+  p.radius = m_idealPadMap->get_radius(p.layer);
+  p.global_phi = wrap_phi(m_idealPadMap->get_phi(static_cast<unsigned int>(TpcDefs::getSide(hsk)), p.layer, p.pad));
+
+  if (!is_good_number(p.radius) || !is_good_number(p.global_phi)) return p;
+
+  p.ok = true;
+  return p;
 }
