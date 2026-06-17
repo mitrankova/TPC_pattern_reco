@@ -43,24 +43,9 @@ class TpcPolyTrackReco : public SubsysReco
     double z {0.0};
   };
 
-  struct FitResult
-  {
-    bool ok {false};
-    double d0 {0.0};
-    double z0 {0.0};
-    double phi0 {0.0};
-    double theta {0.0};
-    double curvature {0.0};
-    double chi2_xy {0.0};
-    double chi2_z {0.0};
-    int ndof_xy {0};
-    int ndof_z {0};
-  };
-
   int getNodes(PHCompositeNode*);
   int createNodes(PHCompositeNode*);
   bool make_xyz_point(TrkrDefs::hitsetkey hsk, TrkrDefs::hitkey hk, int side, Point& p) const;
-  bool fit_points(const std::vector<Point>& points, FitResult& fit) const;
 
   std::string m_inputNodeName;
   std::string m_outputNodeName;
