@@ -5,6 +5,7 @@
 
 class IdealPadMap;
 
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -159,10 +160,18 @@ class FullTrackConnector : public SubsysReco
                                const Piece&     b,
                                double&          score,
                                double&          b_phi_intercept_shifted) const;
+  bool candidates_can_connect(const Candidate& a,
+                               const Candidate& b,
+                               double&          score) const;
 
-  void connect_side_pieces(const std::vector<Piece>& pieces,
-                            int side,
-                            std::vector<Candidate>& output) const;
+  void connect_sector_pieces(const std::vector<Piece>& pieces,
+                              int side,
+                              unsigned int sector,
+                              std::vector<Candidate>& output) const;
+  void connect_side_candidates(const std::vector<Piece>& pieces,
+                                const std::vector<Candidate>& seeds,
+                                int side,
+                                std::vector<Candidate>& output) const;
 
   // ---------------------------------------------------------------
   std::string m_outputFileName;
@@ -205,6 +214,8 @@ class FullTrackConnector : public SubsysReco
   TH1D* m_h_layer_gap;
   TH1D* m_h_nsegments;
   TH1D* m_h_matched_sector_delta;
+
+  mutable std::mutex m_debugMutex;
 
   // ---------------------------------------------------------------
   // TTree branches

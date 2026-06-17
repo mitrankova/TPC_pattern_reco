@@ -1,9 +1,11 @@
 AUTOMAKE_OPTIONS = foreign
+AM_CXXFLAGS = -pthread
 AM_CPPFLAGS = \
   -I$(includedir) \
   -isystem$(OFFLINE_MAIN)/include \
   -isystem$(ROOTSYS)/include
 AM_LDFLAGS = \
+  -pthread \
   -L$(libdir) \
   -L$(OFFLINE_MAIN)/lib \
   -L$(OFFLINE_MAIN)/lib64

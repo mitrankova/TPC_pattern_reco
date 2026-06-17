@@ -31,9 +31,11 @@
 #include <TString.h>
 
 #include <algorithm>
+#include <functional>
 #include <cmath>
 #include <iostream>
 #include <limits>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -51,6 +53,21 @@ namespace
       if (pa.last_layer != pb.last_layer) return pa.last_layer < pb.last_layer;
       if (pa.sector != pb.sector) return pa.sector < pb.sector;
       return pa.source_track_id < pb.source_track_id;
+    }
+  };
+
+  struct CandidateStartSort
+  {
+    const std::vector<FullTrackConnector::Candidate>* candidates;
+    explicit CandidateStartSort(const std::vector<FullTrackConnector::Candidate>* c) : candidates(c) {}
+    bool operator()(unsigned int a, unsigned int b) const
+    {
+      const FullTrackConnector::Candidate& ca = (*candidates)[a];
+      const FullTrackConnector::Candidate& cb = (*candidates)[b];
+      if (ca.first_layer != cb.first_layer) return ca.first_layer < cb.first_layer;
+      if (ca.last_layer != cb.last_layer) return ca.last_layer < cb.last_layer;
+      if (ca.first_sector != cb.first_sector) return ca.first_sector < cb.first_sector;
+      return ca.nsegments < cb.nsegments;
     }
   };
 
@@ -726,15 +743,18 @@ bool FullTrackConnector::candidates_can_connect(const Candidate& a, const Piece&
   const double dmphi = std::fabs(predict_phi_slope(a, rmatch) - predict_phi_slope(b, rmatch));
   const double dmtbin = std::fabs(a.tbin_slope_r - b.tbin_slope);
 
-  if (m_h_dphi) m_h_dphi->Fill(dphi);
-  if (m_h_dtbin) m_h_dtbin->Fill(dtbin);
-  if (m_h_dmphi) m_h_dmphi->Fill(dmphi);
-  if (m_h_dmtbin) m_h_dmtbin->Fill(dmtbin);
-  if (m_h_dphi_vs_dtbin) m_h_dphi_vs_dtbin->Fill(dphi, dtbin);
-  if (m_h_dmphi_vs_dmtbin) m_h_dmphi_vs_dmtbin->Fill(dmphi, dmtbin);
-  if (m_h_dphi_vs_dmphi) m_h_dphi_vs_dmphi->Fill(dphi, dmphi);
-  if (m_h_tbin_slope_vs_last_tbin) m_h_tbin_slope_vs_last_tbin->Fill(a.tbin_slope_r * ra + a.tbin_intercept_r, a.tbin_slope_r);
-  if (m_h_tbin_slope_vs_first_tbin && !b.tbin_values.empty()) m_h_tbin_slope_vs_first_tbin->Fill(b.tbin_values.front(), b.tbin_slope);
+  {
+    std::lock_guard<std::mutex> lock(m_debugMutex);
+    if (m_h_dphi) m_h_dphi->Fill(dphi);
+    if (m_h_dtbin) m_h_dtbin->Fill(dtbin);
+    if (m_h_dmphi) m_h_dmphi->Fill(dmphi);
+    if (m_h_dmtbin) m_h_dmtbin->Fill(dmtbin);
+    if (m_h_dphi_vs_dtbin) m_h_dphi_vs_dtbin->Fill(dphi, dtbin);
+    if (m_h_dmphi_vs_dmtbin) m_h_dmphi_vs_dmtbin->Fill(dmphi, dmtbin);
+    if (m_h_dphi_vs_dmphi) m_h_dphi_vs_dmphi->Fill(dphi, dmphi);
+    if (m_h_tbin_slope_vs_last_tbin) m_h_tbin_slope_vs_last_tbin->Fill(a.tbin_slope_r * ra + a.tbin_intercept_r, a.tbin_slope_r);
+    if (m_h_tbin_slope_vs_first_tbin && !b.tbin_values.empty()) m_h_tbin_slope_vs_first_tbin->Fill(b.tbin_values.front(), b.tbin_slope);
+  }
 
   if (dphi > m_connect_dphi) return false;
   if (dtbin > m_connect_dtbin) return false;
@@ -755,12 +775,12 @@ bool FullTrackConnector::candidates_can_connect(const Candidate& a, const Piece&
   return true;
 }
 
-void FullTrackConnector::connect_side_pieces(const std::vector<Piece>& pieces, int side, std::vector<Candidate>& output) const
+void FullTrackConnector::connect_sector_pieces(const std::vector<Piece>& pieces, int side, unsigned int sector, std::vector<Candidate>& output) const
 {
   std::vector<unsigned int> order;
   for (unsigned int i = 0; i < pieces.size(); ++i)
   {
-    if (pieces[i].side == side) order.push_back(i);
+    if (pieces[i].side == side && pieces[i].sector == sector) order.push_back(i);
   }
   if (order.empty()) return;
 
@@ -812,11 +832,151 @@ void FullTrackConnector::connect_side_pieces(const std::vector<Piece>& pieces, i
         {
           const Piece& accepted_piece = pieces[static_cast<unsigned int>(best_j)];
           const unsigned int accepted_gap = accepted_piece.first_layer - current.last_layer - 1;
-          if (m_h_score) m_h_score->Fill(best_score);
-          if (m_h_layer_gap) m_h_layer_gap->Fill(static_cast<double>(accepted_gap));
-          if (m_h_matched_sector_delta)
           {
-            m_h_matched_sector_delta->Fill(static_cast<double>(wrapped_sector_delta(current.last_sector, accepted_piece.sector)));
+            std::lock_guard<std::mutex> lock(m_debugMutex);
+            if (m_h_score) m_h_score->Fill(best_score);
+            if (m_h_layer_gap) m_h_layer_gap->Fill(static_cast<double>(accepted_gap));
+            if (m_h_matched_sector_delta)
+            {
+              m_h_matched_sector_delta->Fill(static_cast<double>(wrapped_sector_delta(current.last_sector, accepted_piece.sector)));
+            }
+          }
+
+          current = refit;
+          current_indices.swap(trial_indices);
+          used[best_j] = 1;
+          merged_any = true;
+        }
+      }
+    }
+
+    output.push_back(current);
+  }
+}
+
+bool FullTrackConnector::candidates_can_connect(const Candidate& a, const Candidate& b, double& score) const
+{
+  score = std::numeric_limits<double>::max();
+
+  if (a.side != b.side) return false;
+  if (a.last_layer >= b.first_layer) return false;
+  if (a.last_sector == b.first_sector) return false;
+
+  const unsigned int gap = b.first_layer - a.last_layer - 1;
+  if (gap > m_connectMaxLayerGap) return false;
+
+  const double ra = m_idealPadMap->get_radius(a.last_layer);
+  const double rb = m_idealPadMap->get_radius(b.first_layer);
+  if (!std::isfinite(ra) || !std::isfinite(rb) || ra <= 0.0 || rb <= 0.0) return false;
+
+  const double rmatch = 0.5 * (ra + rb);
+  const double phi_a = predict_phi(a, rmatch);
+  const double phi_b = unwrap_phi_to_reference(predict_phi(b, rmatch), phi_a);
+  const double tbin_a = a.tbin_slope_r * rmatch + a.tbin_intercept_r;
+  const double tbin_b = b.tbin_slope_r * rmatch + b.tbin_intercept_r;
+  const double dphi = std::fabs(phi_a - phi_b);
+  const double dtbin = std::fabs(tbin_a - tbin_b);
+  const double dmphi = std::fabs(predict_phi_slope(a, rmatch) - predict_phi_slope(b, rmatch));
+  const double dmtbin = std::fabs(a.tbin_slope_r - b.tbin_slope_r);
+
+  {
+    std::lock_guard<std::mutex> lock(m_debugMutex);
+    if (m_h_dphi) m_h_dphi->Fill(dphi);
+    if (m_h_dtbin) m_h_dtbin->Fill(dtbin);
+    if (m_h_dmphi) m_h_dmphi->Fill(dmphi);
+    if (m_h_dmtbin) m_h_dmtbin->Fill(dmtbin);
+    if (m_h_dphi_vs_dtbin) m_h_dphi_vs_dtbin->Fill(dphi, dtbin);
+    if (m_h_dmphi_vs_dmtbin) m_h_dmphi_vs_dmtbin->Fill(dmphi, dmtbin);
+    if (m_h_dphi_vs_dmphi) m_h_dphi_vs_dmphi->Fill(dphi, dmphi);
+    if (m_h_tbin_slope_vs_last_tbin) m_h_tbin_slope_vs_last_tbin->Fill(a.tbin_slope_r * ra + a.tbin_intercept_r, a.tbin_slope_r);
+    if (m_h_tbin_slope_vs_first_tbin) m_h_tbin_slope_vs_first_tbin->Fill(b.tbin_slope_r * rb + b.tbin_intercept_r, b.tbin_slope_r);
+  }
+
+  if (dphi > m_connect_dphi) return false;
+  if (dtbin > m_connect_dtbin) return false;
+  if (dmphi > m_connect_dphi_slope) return false;
+  if (dmtbin > m_connect_dtbin_slope) return false;
+
+  constexpr double w_phi   = 1.0;
+  constexpr double w_mphi  = 1.0;
+  constexpr double w_tbin  = 1.0;
+  constexpr double w_mtbin = 2.0;
+
+  score = w_phi   * (dphi / m_connect_dphi) * (dphi / m_connect_dphi)
+        + w_tbin  * (dtbin / m_connect_dtbin) * (dtbin / m_connect_dtbin)
+        + w_mphi  * (dmphi / m_connect_dphi_slope) * (dmphi / m_connect_dphi_slope)
+        + w_mtbin * (dmtbin / m_connect_dtbin_slope) * (dmtbin / m_connect_dtbin_slope)
+        + 0.05 * static_cast<double>(gap);
+
+  return true;
+}
+
+void FullTrackConnector::connect_side_candidates(const std::vector<Piece>& pieces,
+                                                 const std::vector<Candidate>& seeds,
+                                                 int side,
+                                                 std::vector<Candidate>& output) const
+{
+  std::vector<unsigned int> order;
+  for (unsigned int i = 0; i < seeds.size(); ++i)
+  {
+    if (seeds[i].side == side) order.push_back(i);
+  }
+  if (order.empty()) return;
+
+  std::sort(order.begin(), order.end(), CandidateStartSort(&seeds));
+  std::vector<int> used(seeds.size(), 0);
+
+  for (unsigned int io = 0; io < order.size(); ++io)
+  {
+    const unsigned int iseed = order[io];
+    if (used[iseed]) continue;
+
+    std::vector<unsigned int> current_indices = seeds[iseed].piece_indices;
+    used[iseed] = 1;
+
+    Candidate current;
+    if (!refit_candidate(pieces, current_indices, current)) continue;
+
+    bool merged_any = true;
+    while (merged_any)
+    {
+      merged_any = false;
+      int best_j = -1;
+      double best_score = std::numeric_limits<double>::max();
+
+      for (unsigned int jo = 0; jo < order.size(); ++jo)
+      {
+        const unsigned int j = order[jo];
+        if (used[j]) continue;
+
+        double score = 0.0;
+        if (!candidates_can_connect(current, seeds[j], score)) continue;
+
+        if (score < best_score)
+        {
+          best_score = score;
+          best_j = static_cast<int>(j);
+        }
+      }
+
+      if (best_j >= 0)
+      {
+        std::vector<unsigned int> trial_indices = current_indices;
+        const Candidate& accepted_seed = seeds[static_cast<unsigned int>(best_j)];
+        trial_indices.insert(trial_indices.end(), accepted_seed.piece_indices.begin(), accepted_seed.piece_indices.end());
+
+        Candidate refit;
+        if (refit_candidate(pieces, trial_indices, refit))
+        {
+          const unsigned int accepted_gap = accepted_seed.first_layer - current.last_layer - 1;
+          {
+            std::lock_guard<std::mutex> lock(m_debugMutex);
+            if (m_h_score) m_h_score->Fill(best_score);
+            if (m_h_layer_gap) m_h_layer_gap->Fill(static_cast<double>(accepted_gap));
+            if (m_h_matched_sector_delta)
+            {
+              m_h_matched_sector_delta->Fill(static_cast<double>(wrapped_sector_delta(current.last_sector, accepted_seed.first_sector)));
+            }
           }
 
           current = refit;
@@ -848,9 +1008,28 @@ int FullTrackConnector::process_event(PHCompositeNode*)
     }
   }
 
+  std::vector<std::vector<Candidate> > sector_outputs(24);
+  std::vector<std::thread> workers;
+  workers.reserve(24);
+  for (int side = 0; side < 2; ++side)
+  {
+    for (unsigned int sector = 0; sector < 12; ++sector)
+    {
+      const unsigned int index = static_cast<unsigned int>(side) * 12 + sector;
+      workers.push_back(std::thread(&FullTrackConnector::connect_sector_pieces, this, std::cref(pieces), side, sector, std::ref(sector_outputs[index])));
+    }
+  }
+  for (std::thread& worker : workers) worker.join();
+
+  std::vector<Candidate> sector_tracks;
+  for (unsigned int i = 0; i < sector_outputs.size(); ++i)
+  {
+    sector_tracks.insert(sector_tracks.end(), sector_outputs[i].begin(), sector_outputs[i].end());
+  }
+
   std::vector<Candidate> full_tracks;
-  connect_side_pieces(pieces, 0, full_tracks);
-  connect_side_pieces(pieces, 1, full_tracks);
+  connect_side_candidates(pieces, sector_tracks, 0, full_tracks);
+  connect_side_candidates(pieces, sector_tracks, 1, full_tracks);
 
   for (unsigned int it = 0; it < full_tracks.size(); ++it)
   {
