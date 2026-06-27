@@ -110,6 +110,16 @@ namespace
     double tbin_slope {0.0};
     double tbin_intercept {0.0};
     Fitter::SagittaFit phi_sagitta;
+    double rmin {0.0};
+    double rmax {0.0};
+  };
+
+  struct PcaPoint
+  {
+    bool ok {false};
+    double radius {0.0};
+    double phi {0.0};
+    double timebin {0.0};
   };
 
   struct CollisionTrack
@@ -165,6 +175,8 @@ namespace
 
     bool first = true;
     double phi_reference = 0.0;
+    result.rmin = std::numeric_limits<double>::max();
+    result.rmax = -std::numeric_limits<double>::max();
     for (unsigned int io = 0; io < order.size(); ++io)
     {
       const FullTrackVertexer::HitPoint& p = pts[order[io]];
@@ -186,6 +198,8 @@ namespace
                                          weight_power, weight_floor_frac);
       radius_phi_points.emplace_back(p.radius, phi, w);
       radius_tbin_points.emplace_back(p.radius, static_cast<double>(p.tbin), w);
+      result.rmin = std::min(result.rmin, p.radius);
+      result.rmax = std::max(result.rmax, p.radius);
     }
 
     if (radius_phi_points.size() < 2 || radius_tbin_points.size() < 2) return result;
@@ -214,10 +228,89 @@ namespace
     return result;
   }
 
-  double phi_at_radius(const VertexFit& fit, const double radius)
+  bool solve_3x3(double A[3][3], double b[3], double x[3])
   {
-    return fit.use_sagitta ? sagitta_phi_at_radius(radius, fit.phi_sagitta)
-                           : fit.phi_slope * radius + fit.phi_intercept;
+    double M[3][4] = {
+      {A[0][0], A[0][1], A[0][2], b[0]},
+      {A[1][0], A[1][1], A[1][2], b[1]},
+      {A[2][0], A[2][1], A[2][2], b[2]}
+    };
+
+    for (int col = 0; col < 3; ++col)
+    {
+      int pivot = col;
+      for (int row = col + 1; row < 3; ++row)
+      {
+        if (std::fabs(M[row][col]) > std::fabs(M[pivot][col])) pivot = row;
+      }
+      if (std::fabs(M[pivot][col]) < 1.0e-20) return false;
+      if (pivot != col)
+      {
+        for (int k = col; k < 4; ++k) std::swap(M[col][k], M[pivot][k]);
+      }
+
+      const double div = M[col][col];
+      for (int k = col; k < 4; ++k) M[col][k] /= div;
+      for (int row = 0; row < 3; ++row)
+      {
+        if (row == col) continue;
+        const double factor = M[row][col];
+        for (int k = col; k < 4; ++k) M[row][k] -= factor * M[col][k];
+      }
+    }
+
+    x[0] = M[0][3];
+    x[1] = M[1][3];
+    x[2] = M[2][3];
+    return true;
+  }
+
+  PcaPoint closest_approach_to_beamline(const std::vector<FullTrackVertexer::HitPoint>& pts,
+                                        const VertexFit& fit)
+  {
+    PcaPoint pca;
+    if (!fit.ok || pts.size() < 3) return pca;
+
+    double A[3][3] = {{0.0, 0.0, 0.0}, {0.0, 0.0, 0.0}, {0.0, 0.0, 0.0}};
+    double b[3] = {0.0, 0.0, 0.0};
+    unsigned int nxy = 0;
+
+    for (const auto& point : pts)
+    {
+      if (!point.ok || !is_good_number(point.radius) || !is_good_number(point.global_phi)) continue;
+      const double x = point.radius * std::cos(point.global_phi);
+      const double y = point.radius * std::sin(point.global_phi);
+      const double row[3] = {x, y, 1.0};
+      const double rhs = -(x * x + y * y);
+      for (int i = 0; i < 3; ++i)
+      {
+        b[i] += row[i] * rhs;
+        for (int j = 0; j < 3; ++j) A[i][j] += row[i] * row[j];
+      }
+      ++nxy;
+    }
+
+    if (nxy < 3) return pca;
+
+    double sol[3] = {0.0, 0.0, 0.0};
+    if (!solve_3x3(A, b, sol)) return pca;
+
+    const double xc = -0.5 * sol[0];
+    const double yc = -0.5 * sol[1];
+    const double r2 = xc * xc + yc * yc - sol[2];
+    if (r2 <= 0.0) return pca;
+
+    const double R = std::sqrt(r2);
+    const double dc = std::hypot(xc, yc);
+    if (R <= 0.0 || dc <= 1.0e-12) return pca;
+
+    const double px = xc * (1.0 - R / dc);
+    const double py = yc * (1.0 - R / dc);
+    pca.radius = std::hypot(px, py);
+    pca.phi = wrap_phi(std::atan2(py, px));
+    pca.timebin = fit.tbin_slope * pca.radius + fit.tbin_intercept;
+    pca.ok = is_good_number(pca.radius) && is_good_number(pca.phi) && is_good_number(pca.timebin);
+    return pca;
   }
 
   CollisionFit fit_collision_point(const std::vector<CollisionTrack>& tracks)
@@ -225,53 +318,96 @@ namespace
     CollisionFit result;
     if (tracks.size() < 2) return result;
 
-    double s_mm = 0.0;
-    double s_mt = 0.0;
-    double s_tt = 0.0;
-    double rhs_r = 0.0;
-    double rhs_t = 0.0;
-
-    for (const auto& trk : tracks)
-    {
-      const double w = static_cast<double>(trk.nlayers);
-      const double m = trk.fit.tbin_slope;
-      const double b = trk.fit.tbin_intercept;
-      s_mm += w * m * m;
-      s_mt -= w * m;
-      s_tt += w;
-      rhs_r -= w * m * b;
-      rhs_t += w * b;
-    }
-
-    const double det = s_mm * s_tt - s_mt * s_mt;
-    if (std::fabs(det) < 1.0e-12) return result;
-
-    result.radius = (rhs_r * s_tt - s_mt * rhs_t) / det;
-    result.timebin = (s_mm * rhs_t - s_mt * rhs_r) / det;
-    if (!is_good_number(result.radius) || !is_good_number(result.timebin)) return result;
-
     double sum_w = 0.0;
-    double sum_res2 = 0.0;
-    double sum_sin = 0.0;
-    double sum_cos = 0.0;
+    double sum_tbin0 = 0.0;
+    double sum_sin_d0 = 0.0;
+    double sum_cos_d0 = 0.0;
+    unsigned int nvalid = 0;
+
     for (const auto& trk : tracks)
     {
-      const double w = static_cast<double>(trk.nlayers);
-      const double tpred = trk.fit.tbin_slope * result.radius + trk.fit.tbin_intercept;
-      const double residual = tpred - result.timebin;
-      const double phi = wrap_phi(phi_at_radius(trk.fit, result.radius));
+      if (!trk.fit.ok || !is_good_number(trk.fit.d0) || !is_good_number(trk.fit.timebin0)) continue;
+
+      const double w = std::max(1.0, static_cast<double>(trk.nlayers));
       sum_w += w;
-      sum_res2 += w * residual * residual;
-      sum_sin += w * std::sin(phi);
-      sum_cos += w * std::cos(phi);
+      sum_tbin0 += w * trk.fit.timebin0;
+      sum_sin_d0 += w * std::sin(trk.fit.d0);
+      sum_cos_d0 += w * std::cos(trk.fit.d0);
+      ++nvalid;
     }
 
-    if (sum_w <= 0.0 || (sum_sin == 0.0 && sum_cos == 0.0)) return result;
-    result.phi = wrap_phi(std::atan2(sum_sin, sum_cos));
+    if (nvalid < 2 || sum_w <= 0.0 || (sum_sin_d0 == 0.0 && sum_cos_d0 == 0.0)) return result;
+
+    result.radius = 0.0;
+    result.phi = wrap_phi(std::atan2(sum_sin_d0, sum_cos_d0));
+    result.timebin = sum_tbin0 / sum_w;
+    if (!is_good_number(result.phi) || !is_good_number(result.timebin)) return result;
+
+    double sum_res2 = 0.0;
+    for (const auto& trk : tracks)
+    {
+      if (!trk.fit.ok || !is_good_number(trk.fit.d0) || !is_good_number(trk.fit.timebin0)) continue;
+
+      const double w = std::max(1.0, static_cast<double>(trk.nlayers));
+      const double residual = trk.fit.timebin0 - result.timebin;
+      sum_res2 += w * residual * residual;
+    }
+
     result.timebin_rms = std::sqrt(sum_res2 / sum_w);
-    result.ntracks = static_cast<unsigned int>(tracks.size());
+    result.ntracks = nvalid;
     result.ok = true;
     return result;
+  }
+
+  std::vector<CollisionFit> fit_collision_points(std::vector<CollisionTrack> tracks,
+                                                 const double timebin_separation)
+  {
+    std::vector<CollisionFit> collisions;
+    if (tracks.size() < 2) return collisions;
+
+    tracks.erase(std::remove_if(tracks.begin(), tracks.end(),
+                                [](const CollisionTrack& trk)
+                                {
+                                  return !trk.fit.ok || !is_good_number(trk.fit.d0) || !is_good_number(trk.fit.timebin0);
+                                }),
+                 tracks.end());
+    if (tracks.size() < 2) return collisions;
+
+    std::sort(tracks.begin(), tracks.end(),
+              [](const CollisionTrack& a, const CollisionTrack& b)
+              {
+                return a.fit.timebin0 < b.fit.timebin0;
+              });
+
+    const double separation = std::max(0.0, timebin_separation);
+    std::vector<CollisionTrack> cluster;
+    cluster.reserve(tracks.size());
+    double cluster_sum_w = 0.0;
+    double cluster_sum_tbin0 = 0.0;
+
+    for (const auto& trk : tracks)
+    {
+      const double w = std::max(1.0, static_cast<double>(trk.nlayers));
+      const double cluster_timebin0 = cluster_sum_w > 0.0 ? cluster_sum_tbin0 / cluster_sum_w : trk.fit.timebin0;
+
+      if (!cluster.empty() && trk.fit.timebin0 - cluster_timebin0 >= separation)
+      {
+        const CollisionFit collision = fit_collision_point(cluster);
+        if (collision.ok) collisions.push_back(collision);
+        cluster.clear();
+        cluster_sum_w = 0.0;
+        cluster_sum_tbin0 = 0.0;
+      }
+
+      cluster.push_back(trk);
+      cluster_sum_w += w;
+      cluster_sum_tbin0 += w * trk.fit.timebin0;
+    }
+
+    const CollisionFit collision = fit_collision_point(cluster);
+    if (collision.ok) collisions.push_back(collision);
+
+    return collisions;
   }
 }
 
@@ -287,6 +423,7 @@ FullTrackVertexer::FullTrackVertexer(const std::string& name)
   , m_fitWeightFloorFrac(0.05)
   , m_useSagittaPhiFit(true)
   , m_collisionMinTrackLayers(10)
+  , m_collisionTimebinSeparation(100.0)
 {
 }
 
@@ -412,6 +549,14 @@ int FullTrackVertexer::process_event(PHCompositeNode* topNode)
     out->set_d0(fit.d0);
     out->set_timebin0(fit.timebin0);
     m_vertices->add_vertex(out);
+    const PcaPoint pca = closest_approach_to_beamline(pts, fit);
+    if (pca.ok)
+    {
+      out->set_pca_valid(1);
+      out->set_pca_radius(pca.radius);
+      out->set_pca_phi(pca.phi);
+      out->set_pca_timebin(pca.timebin);
+    }
 
     const unsigned int nlayers = count_unique_layers(pts);
     if (nlayers >= m_collisionMinTrackLayers)
@@ -423,26 +568,25 @@ int FullTrackVertexer::process_event(PHCompositeNode* topNode)
     }
   }
 
-  const CollisionFit collision = fit_collision_point(collision_tracks);
+  const std::vector<CollisionFit> collisions = fit_collision_points(collision_tracks, m_collisionTimebinSeparation);
   m_vertices->set_collision_min_layers(m_collisionMinTrackLayers);
-  m_vertices->set_collision_ntracks(collision.ntracks);
-  if (collision.ok)
+  m_vertices->clear_collision_vertices();
+  for (const auto& collision : collisions)
   {
-    m_vertices->set_collision_vertex_valid(1);
-    m_vertices->set_collision_radius(collision.radius);
-    m_vertices->set_collision_phi(collision.phi);
-    m_vertices->set_collision_timebin(collision.timebin);
-    m_vertices->set_collision_timebin_rms(collision.timebin_rms);
+    m_vertices->add_collision_vertex(collision.radius, collision.phi, collision.timebin,
+                                     collision.timebin_rms, collision.ntracks);
   }
+  m_vertices->set_collision_vertex_valid(collisions.empty() ? 0 : 1);
 
   if (Verbosity() > 0)
   {
     std::cout << Name() << "::process_event - input tracks=" << ntracks
               << " vertices=" << m_vertices->size()
-              << " collision_ntracks=" << m_vertices->get_collision_ntracks()
-              << " collision_radius=" << m_vertices->get_collision_radius()
-              << " collision_phi=" << m_vertices->get_collision_phi()
-              << " collision_timebin=" << m_vertices->get_collision_timebin()
+              << " collision_vertices=" << m_vertices->get_collision_vertex_count()
+              << " first_collision_ntracks=" << m_vertices->get_collision_ntracks()
+              << " first_collision_radius=" << m_vertices->get_collision_radius()
+              << " first_collision_phi=" << m_vertices->get_collision_phi()
+              << " first_collision_timebin=" << m_vertices->get_collision_timebin()
               << std::endl;
   }
 

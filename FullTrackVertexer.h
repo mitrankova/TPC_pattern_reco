@@ -26,6 +26,7 @@ class FullTrackVertexer : public SubsysReco
   void setFitWeightFloorFrac(double v) { m_fitWeightFloorFrac = v; }
   void setUseSagittaPhiFit(bool v) { m_useSagittaPhiFit = v; }
   void setCollisionMinTrackLayers(unsigned int v) { m_collisionMinTrackLayers = v; }
+  void setCollisionTimebinSeparation(double v) { m_collisionTimebinSeparation = v; }
 
  public:
   struct HitPoint
@@ -56,4 +57,5 @@ class FullTrackVertexer : public SubsysReco
   double m_fitWeightFloorFrac;
   bool m_useSagittaPhiFit;
   unsigned int m_collisionMinTrackLayers;
+  double m_collisionTimebinSeparation;
 };

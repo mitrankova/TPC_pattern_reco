@@ -17,10 +17,18 @@ class FullTrackVertex : public PHObject
   virtual unsigned int get_track_id() const { return 0; }
   virtual double get_d0() const { return 0.0; }
   virtual double get_timebin0() const { return 0.0; }
+  virtual int get_pca_valid() const { return 0; }
+  virtual double get_pca_radius() const { return 0.0; }
+  virtual double get_pca_phi() const { return 0.0; }
+  virtual double get_pca_timebin() const { return 0.0; }
 
   virtual void set_track_id(unsigned int) {}
   virtual void set_d0(double) {}
   virtual void set_timebin0(double) {}
+  virtual void set_pca_valid(int) {}
+  virtual void set_pca_radius(double) {}
+  virtual void set_pca_phi(double) {}
+  virtual void set_pca_timebin(double) {}
 
  private:
   ClassDefOverride(FullTrackVertex, 0)

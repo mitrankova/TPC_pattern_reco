@@ -34,30 +34,41 @@ class FullTrackVertexContainerv1 : public FullTrackVertexContainer
   }
 
   int get_collision_vertex_valid() const override { return m_collision_vertex_valid; }
-  double get_collision_radius() const override { return m_collision_radius; }
-  double get_collision_phi() const override { return m_collision_phi; }
-  double get_collision_timebin() const override { return m_collision_timebin; }
-  double get_collision_timebin_rms() const override { return m_collision_timebin_rms; }
-  unsigned int get_collision_ntracks() const override { return m_collision_ntracks; }
+  double get_collision_radius() const override { return get_collision_radius(0); }
+  double get_collision_phi() const override { return get_collision_phi(0); }
+  double get_collision_timebin() const override { return get_collision_timebin(0); }
+  double get_collision_timebin_rms() const override { return get_collision_timebin_rms(0); }
+  unsigned int get_collision_ntracks() const override { return get_collision_ntracks(0); }
   unsigned int get_collision_min_layers() const override { return m_collision_min_layers; }
 
+  unsigned int get_collision_vertex_count() const override { return static_cast<unsigned int>(m_collision_radius.size()); }
+  double get_collision_radius(unsigned int i) const override;
+  double get_collision_phi(unsigned int i) const override;
+  double get_collision_timebin(unsigned int i) const override;
+  double get_collision_timebin_rms(unsigned int i) const override;
+  unsigned int get_collision_ntracks(unsigned int i) const override;
+
   void set_collision_vertex_valid(int v) override { m_collision_vertex_valid = v; }
-  void set_collision_radius(double v) override { m_collision_radius = v; }
-  void set_collision_phi(double v) override { m_collision_phi = v; }
-  void set_collision_timebin(double v) override { m_collision_timebin = v; }
-  void set_collision_timebin_rms(double v) override { m_collision_timebin_rms = v; }
-  void set_collision_ntracks(unsigned int v) override { m_collision_ntracks = v; }
+  void set_collision_radius(double v) override;
+  void set_collision_phi(double v) override;
+  void set_collision_timebin(double v) override;
+  void set_collision_timebin_rms(double v) override;
+  void set_collision_ntracks(unsigned int v) override;
   void set_collision_min_layers(unsigned int v) override { m_collision_min_layers = v; }
+  void clear_collision_vertices() override;
+  void add_collision_vertex(double radius, double phi, double timebin, double timebin_rms, unsigned int ntracks) override;
 
  private:
+  void ensure_collision_vertex(unsigned int i);
+
   std::vector<FullTrackVertex*> m_vertices;
   int m_collision_vertex_valid {0};
-  double m_collision_radius {0.0};
-  double m_collision_phi {0.0};
-  double m_collision_timebin {0.0};
-  double m_collision_timebin_rms {0.0};
-  unsigned int m_collision_ntracks {0};
+  std::vector<double> m_collision_radius;
+  std::vector<double> m_collision_phi;
+  std::vector<double> m_collision_timebin;
+  std::vector<double> m_collision_timebin_rms;
+  std::vector<unsigned int> m_collision_ntracks;
   unsigned int m_collision_min_layers {0};
 
-  ClassDefOverride(FullTrackVertexContainerv1, 3)
+  ClassDefOverride(FullTrackVertexContainerv1, 4)
 };
