@@ -22,6 +22,15 @@
 #pragma link C++ class TpcPolyTrackv1+;
 #pragma link C++ class TpcPolyTrackContainer+;
 #pragma link C++ class TpcPolyTrackContainerv1+;
+#pragma link C++ class TpcPolyCluster+;
+#pragma link C++ class TpcPolyClusterv1+;
+#pragma link C++ class TpcPolyClusterContainer+;
+#pragma link C++ class TpcPolyClusterContainerv1+;
+#pragma link C++ class TpcPolyClusterizer-;
+#pragma link C++ class TpcPolyClusterTrack+;
+#pragma link C++ class TpcPolyClusterTrackv1+;
+#pragma link C++ class TpcPolyClusterTrackContainer+;
+#pragma link C++ class TpcPolyClusterTrackContainerv1+;
 
 #pragma link C++ class Fitter+;
 #pragma link C++ class IdealPadMap+;

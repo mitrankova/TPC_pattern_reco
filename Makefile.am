@@ -30,6 +30,15 @@ pkginclude_HEADERS = \
   TpcPolyTrackContainer.h \
   TpcPolyTrackContainerv1.h \
   TpcPolyTrackReco.h \
+  TpcPolyCluster.h \
+  TpcPolyClusterv1.h \
+  TpcPolyClusterContainer.h \
+  TpcPolyClusterContainerv1.h \
+  TpcPolyClusterizer.h \
+  TpcPolyClusterTrack.h \
+  TpcPolyClusterTrackv1.h \
+  TpcPolyClusterTrackContainer.h \
+  TpcPolyClusterTrackContainerv1.h \
   TpcPolyHelixFitter.h \
   Fitter.h \
   IdealPadMap.h \
@@ -60,6 +69,15 @@ libInModuleTracks_la_SOURCES = \
   TpcPolyTrackContainerv1.cc \
   TpcPolyTrackReco.cc \
   TpcPolyHelixFitter.cc \
+  TpcPolyCluster.cc \
+  TpcPolyClusterv1.cc \
+  TpcPolyClusterContainer.cc \
+  TpcPolyClusterContainerv1.cc \
+  TpcPolyClusterizer.cc \
+  TpcPolyClusterTrack.cc \
+  TpcPolyClusterTrackv1.cc \
+  TpcPolyClusterTrackContainer.cc \
+  TpcPolyClusterTrackContainerv1.cc \
   Fitter.cc \
   IdealPadMap.cc \
   TpcPadMap.cc \
@@ -93,7 +111,7 @@ noinst_PROGRAMS = \
   testexternals
 testexternals_SOURCES = testexternals.cc
 testexternals_LDADD   = libInModuleTracks.la
-InModuleTrackDict.cc: InModuleTrack.h InModuleTrackv1.h InModuleTrackContainer.h InModuleTrackContainerv1.h FullTrack.h FullTrackv1.h FullTrackContainer.h FullTrackContainerv1.h FullTrackVertex.h FullTrackVertexv1.h FullTrackVertexContainer.h FullTrackVertexContainerv1.h FullTrackVertexer.h TpcPolyTrack.h TpcPolyTrackv1.h TpcPolyTrackContainer.h TpcPolyTrackContainerv1.h Fitter.h IdealPadMap.h TpcPadMap.h TpcPadMapv1.h LinkDef.h
+InModuleTrackDict.cc: InModuleTrack.h InModuleTrackv1.h InModuleTrackContainer.h InModuleTrackContainerv1.h FullTrack.h FullTrackv1.h FullTrackContainer.h FullTrackContainerv1.h FullTrackVertex.h FullTrackVertexv1.h FullTrackVertexContainer.h FullTrackVertexContainerv1.h FullTrackVertexer.h TpcPolyTrack.h TpcPolyTrackv1.h TpcPolyTrackContainer.h TpcPolyTrackContainerv1.h TpcPolyCluster.h TpcPolyClusterv1.h TpcPolyClusterContainer.h TpcPolyClusterContainerv1.h TpcPolyClusterizer.h TpcPolyClusterTrack.h TpcPolyClusterTrackv1.h TpcPolyClusterTrackContainer.h TpcPolyClusterTrackContainerv1.h Fitter.h IdealPadMap.h TpcPadMap.h TpcPadMapv1.h LinkDef.h
 	rootcling -f $@ -c $(AM_CPPFLAGS) $^
 testexternals.cc:
 	echo "//*** this is a generated file. Do not commit, do not edit" > $@
