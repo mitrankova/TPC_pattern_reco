@@ -53,6 +53,17 @@ class FullTrackConnector : public SubsysReco
 
   void setUseSagittaPhiFit(bool v) { m_useSagittaPhiFit = v; }
 
+  void setSeedCovarianceDiagonal(double sigmaX, double sigmaY, double sigmaZ,
+                                 double sigmaPx, double sigmaPy, double sigmaPz)
+  {
+    m_seedSigmaX = sigmaX;
+    m_seedSigmaY = sigmaY;
+    m_seedSigmaZ = sigmaZ;
+    m_seedSigmaPx = sigmaPx;
+    m_seedSigmaPy = sigmaPy;
+    m_seedSigmaPz = sigmaPz;
+  }
+
  public:
   // ---------------------------------------------------------------
   // Piece: one InModuleTrack refit from stored hit indices for temporary matching.
@@ -99,6 +110,18 @@ class FullTrackConnector : public SubsysReco
   // Candidate: a growing full track built from one or more Pieces.
   // Fits are temporary and are not copied into the output FullTrack object.
   // ---------------------------------------------------------------
+  struct SeedParameters
+  {
+    bool ok {false};
+    double x {0.0};
+    double y {0.0};
+    double z {0.0};
+    double px {0.0};
+    double py {0.0};
+    double pz {0.0};
+    double cov[6][6] {};
+  };
+
   struct Candidate
   {
     Candidate();
@@ -172,6 +195,7 @@ class FullTrackConnector : public SubsysReco
                                 const std::vector<Candidate>& seeds,
                                 int side,
                                 std::vector<Candidate>& output) const;
+  SeedParameters make_seed_parameters(const Candidate& c) const;
 
   // ---------------------------------------------------------------
   std::string m_outputFileName;
@@ -196,6 +220,12 @@ class FullTrackConnector : public SubsysReco
   double       m_connect_dphi_slope;
   double       m_connect_dtbin_slope;
   bool         m_useSagittaPhiFit;
+  double       m_seedSigmaX;
+  double       m_seedSigmaY;
+  double       m_seedSigmaZ;
+  double       m_seedSigmaPx;
+  double       m_seedSigmaPy;
+  double       m_seedSigmaPz;
 
   // Debug matching histograms
   TH1D* m_h_dphi;

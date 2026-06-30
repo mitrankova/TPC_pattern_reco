@@ -279,6 +279,12 @@ FullTrackConnector::FullTrackConnector(const std::string& name, const std::strin
   , m_connect_dphi_slope(0.01)
   , m_connect_dtbin_slope(2.0)
   , m_useSagittaPhiFit(true)
+  , m_seedSigmaX(5.0)
+  , m_seedSigmaY(5.0)
+  , m_seedSigmaZ(10.0)
+  , m_seedSigmaPx(1.0)
+  , m_seedSigmaPy(1.0)
+  , m_seedSigmaPz(1.0)
   , m_h_dphi(nullptr)
   , m_h_dtbin(nullptr)
   , m_h_dmphi(nullptr)
@@ -991,6 +997,57 @@ void FullTrackConnector::connect_side_candidates(const std::vector<Piece>& piece
   }
 }
 
+
+FullTrackConnector::SeedParameters
+FullTrackConnector::make_seed_parameters(const Candidate& c) const
+{
+  SeedParameters seed;
+  if (!m_idealPadMap) return seed;
+
+  const double r_first = m_idealPadMap->get_radius(c.first_layer);
+  const double r_last = m_idealPadMap->get_radius(c.last_layer);
+  if (!std::isfinite(r_first) || !std::isfinite(r_last)) return seed;
+
+  const double radius = 0.5 * (r_first + r_last);
+  const double phi = wrap_to_pi(predict_phi(c, radius));
+  const double dphi_dr = predict_phi_slope(c, radius);
+  const double dtbin_dr = c.tbin_slope_r;
+  const double tbin = c.tbin_slope_r * radius + c.tbin_intercept_r;
+  if (!std::isfinite(radius) || !std::isfinite(phi) ||
+      !std::isfinite(dphi_dr) || !std::isfinite(dtbin_dr) || !std::isfinite(tbin))
+  {
+    return seed;
+  }
+
+  seed.x = radius * std::cos(phi);
+  seed.y = radius * std::sin(phi);
+  seed.z = tbin;
+
+  const double dx_dr = std::cos(phi) - radius * std::sin(phi) * dphi_dr;
+  const double dy_dr = std::sin(phi) + radius * std::cos(phi) * dphi_dr;
+  const double dz_dr = dtbin_dr;
+  const double norm = std::sqrt(dx_dr * dx_dr + dy_dr * dy_dr + dz_dr * dz_dr);
+  if (!std::isfinite(norm) || norm <= 0.0) return seed;
+
+  seed.px = dx_dr / norm;
+  seed.py = dy_dr / norm;
+  seed.pz = dz_dr / norm;
+
+  for (unsigned int i = 0; i < 6; ++i)
+  {
+    for (unsigned int j = 0; j < 6; ++j) seed.cov[i][j] = 0.0;
+  }
+  seed.cov[0][0] = m_seedSigmaX * m_seedSigmaX;
+  seed.cov[1][1] = m_seedSigmaY * m_seedSigmaY;
+  seed.cov[2][2] = m_seedSigmaZ * m_seedSigmaZ;
+  seed.cov[3][3] = m_seedSigmaPx * m_seedSigmaPx;
+  seed.cov[4][4] = m_seedSigmaPy * m_seedSigmaPy;
+  seed.cov[5][5] = m_seedSigmaPz * m_seedSigmaPz;
+  seed.ok = std::isfinite(seed.x) && std::isfinite(seed.y) && std::isfinite(seed.z) &&
+            std::isfinite(seed.px) && std::isfinite(seed.py) && std::isfinite(seed.pz);
+  return seed;
+}
+
 int FullTrackConnector::process_event(PHCompositeNode*)
 {
   reset_tree_vars();
@@ -1064,6 +1121,25 @@ int FullTrackConnector::process_event(PHCompositeNode*)
     out->set_last_sector(c.last_sector);
     out->set_first_region(c.first_region);
     out->set_last_region(c.last_region);
+
+    const SeedParameters seed = make_seed_parameters(c);
+    if (seed.ok)
+    {
+      out->set_seed_valid(1);
+      out->set_seed_x(seed.x);
+      out->set_seed_y(seed.y);
+      out->set_seed_z(seed.z);
+      out->set_seed_px(seed.px);
+      out->set_seed_py(seed.py);
+      out->set_seed_pz(seed.pz);
+      for (unsigned int iseed = 0; iseed < 6; ++iseed)
+      {
+        for (unsigned int jseed = 0; jseed < 6; ++jseed)
+        {
+          out->set_seed_cov(iseed, jseed, seed.cov[iseed][jseed]);
+        }
+      }
+    }
 
     m_tree_track_id.push_back(full_id);
     m_tree_side.push_back(c.side);

@@ -37,6 +37,9 @@ void FullTrackv1::identify(std::ostream& os) const
      << " vertex_tbin=" << m_vertex_tbin
      << " vertex_npairs=" << m_vertex_npairs
      << " vertex_quality=" << m_vertex_quality
+     << " seed_valid=" << m_seed_valid
+     << " seed_pos=(" << m_seed_x << "," << m_seed_y << "," << m_seed_z << ")"
+     << " seed_mom=(" << m_seed_px << "," << m_seed_py << "," << m_seed_pz << ")"
      << " source_tracks=" << m_source_track_ids.size()
      << " hit_indices=" << m_hit_indices.size()
      << std::endl;
@@ -49,6 +52,7 @@ void FullTrackv1::Reset()
   m_side = 0;
 
   m_nsegments = 0;
+  m_nblobs = 0;
   m_nrawhits = 0;
   m_first_layer = 0;
   m_last_layer = 0;
@@ -66,7 +70,7 @@ void FullTrackv1::Reset()
   m_ndof_phi = 0;
   m_ndof_tbin = 0;
 
-    m_vertex_valid = 0;
+  m_vertex_valid = 0;
   m_vertex_x = 0.0;
   m_vertex_y = 0.0;
   m_vertex_r = 0.0;
@@ -75,6 +79,14 @@ void FullTrackv1::Reset()
   m_vertex_npairs = 0;
   m_vertex_quality = 0.0;
 
+  m_seed_valid = 0;
+  m_seed_x = 0.0;
+  m_seed_y = 0.0;
+  m_seed_z = 0.0;
+  m_seed_px = 0.0;
+  m_seed_py = 0.0;
+  m_seed_pz = 0.0;
+  m_seed_cov.assign(36, 0.0);
 
   m_source_track_ids.clear();
   m_source_regions.clear();

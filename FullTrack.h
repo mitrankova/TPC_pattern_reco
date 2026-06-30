@@ -90,6 +90,25 @@ class FullTrack : public PHObject
   virtual void set_vertex_tbin(double) {}
   virtual void set_vertex_npairs(unsigned int) {}
   virtual void set_vertex_quality(double) {}
+
+  // --- Preliminary GenFit seed from the connector fit ---
+  virtual int get_seed_valid() const { return 0; }
+  virtual double get_seed_x() const { return 0.0; }
+  virtual double get_seed_y() const { return 0.0; }
+  virtual double get_seed_z() const { return 0.0; }
+  virtual double get_seed_px() const { return 0.0; }
+  virtual double get_seed_py() const { return 0.0; }
+  virtual double get_seed_pz() const { return 0.0; }
+  virtual double get_seed_cov(unsigned int, unsigned int) const { return 0.0; }
+
+  virtual void set_seed_valid(int) {}
+  virtual void set_seed_x(double) {}
+  virtual void set_seed_y(double) {}
+  virtual void set_seed_z(double) {}
+  virtual void set_seed_px(double) {}
+  virtual void set_seed_py(double) {}
+  virtual void set_seed_pz(double) {}
+  virtual void set_seed_cov(unsigned int, unsigned int, double) {}
   
   // Source InModuleTrack ids used by this full track.
   virtual void add_source_track(unsigned int /*track_id*/,

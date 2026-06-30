@@ -48,6 +48,20 @@ class FullTrackv1 : public FullTrack
   unsigned int get_vertex_npairs() const override { return m_vertex_npairs; }
   double get_vertex_quality() const override { return m_vertex_quality; }
 
+  int get_seed_valid() const override { return m_seed_valid; }
+  double get_seed_x() const override { return m_seed_x; }
+  double get_seed_y() const override { return m_seed_y; }
+  double get_seed_z() const override { return m_seed_z; }
+  double get_seed_px() const override { return m_seed_px; }
+  double get_seed_py() const override { return m_seed_py; }
+  double get_seed_pz() const override { return m_seed_pz; }
+  double get_seed_cov(unsigned int i, unsigned int j) const override
+  {
+    const unsigned int idx = 6 * i + j;
+    if (i >= 6 || j >= 6 || idx >= m_seed_cov.size()) return 0.0;
+    return m_seed_cov[idx];
+  }
+
   void set_vertex_valid(int v) override { m_vertex_valid = v; }
   void set_vertex_x(double v) override { m_vertex_x = v; }
   void set_vertex_y(double v) override { m_vertex_y = v; }
@@ -56,6 +70,21 @@ class FullTrackv1 : public FullTrack
   void set_vertex_tbin(double v) override { m_vertex_tbin = v; }
   void set_vertex_npairs(unsigned int v) override { m_vertex_npairs = v; }
   void set_vertex_quality(double v) override { m_vertex_quality = v; }
+
+  void set_seed_valid(int v) override { m_seed_valid = v; }
+  void set_seed_x(double v) override { m_seed_x = v; }
+  void set_seed_y(double v) override { m_seed_y = v; }
+  void set_seed_z(double v) override { m_seed_z = v; }
+  void set_seed_px(double v) override { m_seed_px = v; }
+  void set_seed_py(double v) override { m_seed_py = v; }
+  void set_seed_pz(double v) override { m_seed_pz = v; }
+  void set_seed_cov(unsigned int i, unsigned int j, double v) override
+  {
+    if (i >= 6 || j >= 6) return;
+    if (m_seed_cov.size() != 36) m_seed_cov.assign(36, 0.0);
+    m_seed_cov[6 * i + j] = v;
+    m_seed_cov[6 * j + i] = v;
+  }
 
   void set_event(unsigned int v) override { m_event = v; }
   void set_track_id(unsigned int v) override { m_track_id = v; }
@@ -164,10 +193,19 @@ class FullTrackv1 : public FullTrack
   unsigned int m_vertex_npairs {0};
   double m_vertex_quality {0.0};
 
+  int m_seed_valid {0};
+  double m_seed_x {0.0};
+  double m_seed_y {0.0};
+  double m_seed_z {0.0};
+  double m_seed_px {0.0};
+  double m_seed_py {0.0};
+  double m_seed_pz {0.0};
+  std::vector<double> m_seed_cov;
+
   std::vector<unsigned int> m_source_track_ids;
   std::vector<unsigned int> m_source_regions;
   std::vector<unsigned int> m_source_sectors;
   std::vector<HitIndex> m_hit_indices;
 
-  ClassDefOverride(FullTrackv1, 1)
+  ClassDefOverride(FullTrackv1, 2)
 };
