@@ -141,6 +141,13 @@ testexternals.cc:
 	echo "{" >> $@
 	echo "  return 0;" >> $@
 	echo "}" >> $@
+install-exec-hook:
+	$(MKDIR_P) $(DESTDIR)$(libdir)
+	test ! -f InModuleTrackDict_rdict.pcm || $(INSTALL_DATA) InModuleTrackDict_rdict.pcm $(DESTDIR)$(libdir)/InModuleTrackDict_rdict.pcm
+
+uninstall-hook:
+	rm -f $(DESTDIR)$(libdir)/InModuleTrackDict_rdict.pcm
+
 clean-local:
 	rm -f $(BUILT_SOURCES)
 	rm -f InModuleTrackDict_rdict.pcm
