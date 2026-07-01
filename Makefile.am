@@ -1,7 +1,7 @@
 AUTOMAKE_OPTIONS = foreign
 AM_CXXFLAGS = -pthread
 AM_CPPFLAGS = \
-  -I$(includedir) \
+  -I$(top_srcdir) \
   -isystem$(OFFLINE_MAIN)/include \
   -isystem$(ROOTSYS)/include
 AM_LDFLAGS = \
@@ -133,7 +133,7 @@ noinst_PROGRAMS = \
   testexternals
 testexternals_SOURCES = testexternals.cc
 testexternals_LDADD   = libInModuleTracks.la
-InModuleTrackDict.cc: InModuleTrack.h InModuleTrackv1.h InModuleTrackContainer.h InModuleTrackContainerv1.h FullTrack.h FullTrackv1.h FullTrackContainer.h FullTrackContainerv1.h FullTrackVertex.h FullTrackVertexv1.h FullTrackVertexContainer.h FullTrackVertexContainerv1.h FullTrackVertexer.h FinalTrack.h FinalTrackv1.h FinalTrackContainer.h FinalTrackContainerv1.h FinalTrackVertex.h FinalTrackVertexv1.h FinalTrackVertexContainer.h FinalTrackVertexContainerv1.h FinalTrackVertexer.h TpcPolyTrack.h TpcPolyTrackv1.h TpcPolyTrackContainer.h TpcPolyTrackContainerv1.h TpcPolyCluster.h TpcPolyClusterv1.h TpcPolyClusterContainer.h TpcPolyClusterContainerv1.h TpcPolyClusterizer.h TpcPolyClusterTrack.h TpcPolyClusterTrackv1.h TpcPolyClusterTrackContainer.h TpcPolyClusterTrackContainerv1.h Fitter.h IdealPadMap.h TpcPadMap.h TpcPadMapv1.h LinkDef.h
+InModuleTrackDict.cc: InModuleTrack.h InModuleTrackv1.h InModuleTrackContainer.h InModuleTrackContainerv1.h FullTrack.h FullTrackv1.h FullTrackContainer.h FullTrackContainerv1.h FullTrackVertex.h FullTrackVertexv1.h FullTrackVertexContainer.h FullTrackVertexContainerv1.h FinalTrack.h FinalTrackv1.h FinalTrackContainer.h FinalTrackContainerv1.h FinalTrackVertex.h FinalTrackVertexv1.h FinalTrackVertexContainer.h FinalTrackVertexContainerv1.h TpcPolyTrack.h TpcPolyTrackv1.h TpcPolyTrackContainer.h TpcPolyTrackContainerv1.h TpcPolyCluster.h TpcPolyClusterv1.h TpcPolyClusterContainer.h TpcPolyClusterContainerv1.h TpcPolyClusterTrack.h TpcPolyClusterTrackv1.h TpcPolyClusterTrackContainer.h TpcPolyClusterTrackContainerv1.h Fitter.h IdealPadMap.h TpcPadMap.h TpcPadMapv1.h LinkDef.h
 	rootcling -f $@ -c $(AM_CPPFLAGS) $^
 testexternals.cc:
 	echo "//*** this is a generated file. Do not commit, do not edit" > $@

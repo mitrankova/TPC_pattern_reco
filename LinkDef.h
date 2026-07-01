@@ -16,7 +16,6 @@
 #pragma link C++ class FullTrackVertexv1+;
 #pragma link C++ class FullTrackVertexContainer+;
 #pragma link C++ class FullTrackVertexContainerv1+;
-#pragma link C++ class FullTrackVertexer-;
 #pragma link C++ class FinalTrack+;
 #pragma link C++ class FinalTrackv1+;
 #pragma link C++ class FinalTrackContainer+;
@@ -25,7 +24,6 @@
 #pragma link C++ class FinalTrackVertexv1+;
 #pragma link C++ class FinalTrackVertexContainer+;
 #pragma link C++ class FinalTrackVertexContainerv1+;
-#pragma link C++ class FinalTrackVertexer-;
 
 #pragma link C++ class TpcPolyTrack+;
 #pragma link C++ class TpcPolyTrackv1+;
@@ -35,7 +33,6 @@
 #pragma link C++ class TpcPolyClusterv1+;
 #pragma link C++ class TpcPolyClusterContainer+;
 #pragma link C++ class TpcPolyClusterContainerv1+;
-#pragma link C++ class TpcPolyClusterizer-;
 #pragma link C++ class TpcPolyClusterTrack+;
 #pragma link C++ class TpcPolyClusterTrackv1+;
 #pragma link C++ class TpcPolyClusterTrackContainer+;
