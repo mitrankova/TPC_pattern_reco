@@ -91,7 +91,7 @@ class FullTrack : public PHObject
   virtual void set_vertex_npairs(unsigned int) {}
   virtual void set_vertex_quality(double) {}
 
-  // --- Preliminary GenFit seed from the connector fit ---
+  // --- Preliminary track seed from the connector fit ---
   virtual int get_seed_valid() const { return 0; }
   virtual double get_seed_x() const { return 0.0; }
   virtual double get_seed_y() const { return 0.0; }

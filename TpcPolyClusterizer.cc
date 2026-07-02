@@ -23,18 +23,9 @@
 #include <trackbase/TrkrHitSetContainer.h>
 
 #include <phgarfield/PHGarfield.h>
-#include <phgenfit/Fitter.h>
-#include <phgenfit/Measurement.h>
-#include <phgenfit/SpacepointMeasurement.h>
-#include <phgenfit/Track.h>
-#include <phfield/PHFieldUtility.h>
-#include <GenFit/MeasuredStateOnPlane.h>
-#include <GenFit/RKTrackRep.h>
+#include "TpcPolyHelixFitter.h"
 
-#include <TMatrixDSym.h>
-#include <TGeoManager.h>
 #include <TPolyLine3D.h>
-#include <TVector3.h>
 
 #include <algorithm>
 #include <cmath>
@@ -58,7 +49,6 @@ TpcPolyClusterizer::~TpcPolyClusterizer()
   m_idealPadMap = nullptr;
   delete m_garfield;
   m_garfield = nullptr;
-  m_genfitFitter.reset();
 }
 
 int TpcPolyClusterizer::InitRun(PHCompositeNode* topNode)
@@ -81,30 +71,6 @@ int TpcPolyClusterizer::InitRun(PHCompositeNode* topNode)
     std::cerr << Name() << "::InitRun - PHGarfield InitRun failed" << std::endl;
     return Fun4AllReturnCodes::ABORTRUN;
   }
-
-  m_genfitFitter.reset();
-
-  if (!gGeoManager)
-  {
-    std::cerr << Name() << "::InitRun - no active TGeoManager. "
-              << "Load Tracking_Geometry before initializing GenFit." << std::endl;
-    return Fun4AllReturnCodes::ABORTRUN;
-  }
-
-  auto* fieldMap = PHFieldUtility::GetFieldMapNode(nullptr, topNode, Verbosity());
-  if (!fieldMap)
-  {
-    std::cerr << Name() << "::InitRun - failed to get magnetic field map" << std::endl;
-    return Fun4AllReturnCodes::ABORTRUN;
-  }
-
-  m_genfitFitter.reset(PHGenFit::Fitter::getInstance(gGeoManager,
-                                                     fieldMap,
-                                                     "KalmanFitter",
-                                                     "RKTrackRep",
-                                                     false));
-  if (m_genfitFitter) m_genfitFitter->set_verbosity(Verbosity());
-
   m_event = 0;
   return Fun4AllReturnCodes::EVENT_OK;
 }
@@ -278,10 +244,10 @@ TpcPolyClusterizer::make_centroid(const std::vector<Point>& points)
 FinalTrack*
 TpcPolyClusterizer::fit_cluster_track(const FullTrack* full, const TpcPolyClusterTrack* cluster_track) const
 {
-  if (!full || !cluster_track || !m_genfitFitter) return nullptr;
+  if (!full || !cluster_track) return nullptr;
   if (!full->get_seed_valid() || cluster_track->size_clusters() < 3) return nullptr;
 
-  std::vector<TVector3> positions;
+  std::vector<TpcPolyHelixFitter::Point> positions;
   positions.reserve(cluster_track->size_clusters());
   for (unsigned int icluster = 0; icluster < cluster_track->size_clusters(); ++icluster)
   {
@@ -289,108 +255,72 @@ TpcPolyClusterizer::fit_cluster_track(const FullTrack* full, const TpcPolyCluste
     const double y = cluster_track->get_cluster_y(icluster);
     const double z = cluster_track->get_cluster_z(icluster);
     if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) continue;
-    positions.emplace_back(x, y, z);
+    positions.push_back({x, y, z});
   }
   if (positions.size() < 3) return nullptr;
 
-  TVector3 seed_pos = positions.front();
-  TVector3 seed_mom(full->get_seed_px(), full->get_seed_py(), full->get_seed_pz());
-  if (!std::isfinite(seed_mom.X()) || !std::isfinite(seed_mom.Y()) || !std::isfinite(seed_mom.Z()) || seed_mom.Mag() <= 0.0)
-  {
-    seed_mom = positions.back() - positions.front();
-  }
-  if (seed_mom.Mag() <= 0.0) return nullptr;
-  seed_mom.SetMag(1.0);
+  TpcPolyHelixFitter::Seed seed;
+  seed.valid = full->get_seed_valid();
+  seed.x = full->get_seed_x();
+  seed.y = full->get_seed_y();
+  seed.z = full->get_seed_z();
+  seed.px = full->get_seed_px();
+  seed.py = full->get_seed_py();
+  seed.pz = full->get_seed_pz();
 
-  TMatrixDSym seed_cov(6);
-  seed_cov.Zero();
-  for (unsigned int i = 0; i < 6; ++i)
+  if (!std::isfinite(seed.px) || !std::isfinite(seed.py) || !std::isfinite(seed.pz) ||
+      std::hypot(seed.px, seed.py) <= 0.0)
   {
-    for (unsigned int j = 0; j < 6; ++j) seed_cov(i, j) = full->get_seed_cov(i, j);
+    seed.px = positions.back().x - positions.front().x;
+    seed.py = positions.back().y - positions.front().y;
+    seed.pz = positions.back().z - positions.front().z;
+    seed.x = positions.front().x;
+    seed.y = positions.front().y;
+    seed.z = positions.front().z;
+    seed.valid = true;
   }
-  bool have_cov = false;
-  for (unsigned int i = 0; i < 6; ++i)
-  {
-    if (seed_cov(i, i) > 0.0 && std::isfinite(seed_cov(i, i))) have_cov = true;
-  }
-  if (!have_cov)
-  {
-    seed_cov(0, 0) = 25.0;
-    seed_cov(1, 1) = 25.0;
-    seed_cov(2, 2) = 25.0;
-    seed_cov(3, 3) = 1.0;
-    seed_cov(4, 4) = 1.0;
-    seed_cov(5, 5) = 1.0;
-  }
+  if (std::hypot(seed.px, seed.py) <= 0.0) return nullptr;
 
-  std::unique_ptr<genfit::AbsTrackRep> rep(new genfit::RKTrackRep(m_genfitParticleId));
-  std::unique_ptr<PHGenFit::Track> gf_track(new PHGenFit::Track(rep.release(), seed_pos, seed_mom, seed_cov));
+  TpcPolyHelixFitter::FitResult fit;
+  if (!TpcPolyHelixFitter::fit(positions, seed, fit) || !fit.ok) return nullptr;
 
-  std::vector<PHGenFit::Measurement*> measurements;
-  measurements.reserve(positions.size());
-  for (const TVector3& pos : positions)
-  {
-    measurements.push_back(new PHGenFit::SpacepointMeasurement(pos, m_genfitMeasurementResolution));
-  }
-  gf_track->addMeasurements(measurements);
+  const TpcPolyHelixFitter::Point& first = positions.front();
+  const double radial_x = first.x - fit.xc;
+  const double radial_y = first.y - fit.yc;
+  const double radial_r = std::hypot(radial_x, radial_y);
+  if (radial_r <= 0.0) return nullptr;
 
-  int fit_status = -1;
-  try
-  {
-    fit_status = m_genfitFitter->processTrack(gf_track.get(), false);
-  }
-  catch (...)
-  {
-    return nullptr;
-  }
-  if (fit_status != 0) return nullptr;
+  double tx = -fit.curvature * fit.radius * radial_y / radial_r;
+  double ty =  fit.curvature * fit.radius * radial_x / radial_r;
+  double tz = fit.dzds;
+  double norm = std::sqrt(tx * tx + ty * ty + tz * tz);
+  if (norm <= 0.0 || !std::isfinite(norm)) return nullptr;
+  tx /= norm;
+  ty /= norm;
+  tz /= norm;
 
-  TVector3 final_pos = seed_pos;
-  TVector3 final_mom = gf_track->get_mom();
-  TMatrixDSym final_cov(6);
-  final_cov.Zero();
-
-  try
-  {
-    std::unique_ptr<genfit::MeasuredStateOnPlane> state(gf_track->extrapolateToPoint(seed_pos));
-    if (state)
-    {
-      state->getPosMomCov(final_pos, final_mom, final_cov);
-    }
-  }
-  catch (...)
-  {
-    for (unsigned int i = 0; i < 6; ++i)
-    {
-      for (unsigned int j = 0; j < 6; ++j) final_cov(i, j) = seed_cov(i, j);
-    }
-  }
-
-  if (!std::isfinite(final_pos.X()) || !std::isfinite(final_pos.Y()) || !std::isfinite(final_pos.Z()) ||
-      !std::isfinite(final_mom.X()) || !std::isfinite(final_mom.Y()) || !std::isfinite(final_mom.Z()))
-  {
-    return nullptr;
-  }
+  double seed_p = std::sqrt(seed.px * seed.px + seed.py * seed.py + seed.pz * seed.pz);
+  if (!std::isfinite(seed_p) || seed_p <= 0.0) seed_p = 1.0;
 
   FinalTrackv1* out = new FinalTrackv1();
   out->set_event(m_event);
   out->set_source_full_track_id(full->get_track_id());
   out->set_fit_status(1);
   out->set_nclusters(static_cast<unsigned int>(positions.size()));
-  out->set_x(final_pos.X());
-  out->set_y(final_pos.Y());
-  out->set_z(final_pos.Z());
-  out->set_px(final_mom.X());
-  out->set_py(final_mom.Y());
-  out->set_pz(final_mom.Z());
-  out->set_charge(gf_track->get_charge());
-  out->set_chi2(gf_track->get_chi2());
-  out->set_ndf(gf_track->get_ndf());
+  out->set_x(first.x);
+  out->set_y(first.y);
+  out->set_z(first.z);
+  out->set_px(seed_p * tx);
+  out->set_py(seed_p * ty);
+  out->set_pz(seed_p * tz);
+  out->set_charge((fit.curvature >= 0.0) ? 1.0 : -1.0);
+  out->set_chi2(fit.chi2_xy + fit.chi2_z);
+  out->set_ndf(fit.ndof_xy + fit.ndof_z);
   for (unsigned int i = 0; i < 6; ++i)
   {
     for (unsigned int j = 0; j < 6; ++j)
     {
-      out->set_cov(i, j, final_cov(i, j));
+      out->set_cov(i, j, full->get_seed_cov(i, j));
     }
   }
   return out;

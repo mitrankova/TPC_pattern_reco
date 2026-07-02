@@ -14,7 +14,6 @@ class IdealPadMap;
 class PHCompositeNode;
 class PHGarfield;
 class FinalTrackContainer;
-namespace PHGenFit { class Fitter; }
 class TpcPolyClusterTrack;
 class TpcPolyClusterTrackContainer;
 class TrkrHitSetContainer;
@@ -31,8 +30,6 @@ class TpcPolyClusterizer : public SubsysReco
   void setInputNodeName(const std::string& n) { m_inputNodeName = n; }
   void setOutputNodeName(const std::string& n) { m_outputNodeName = n; }
   void setFinalTrackNodeName(const std::string& n) { m_finalTrackNodeName = n; }
-  void setGenFitParticleId(int pid) { m_genfitParticleId = pid; }
-  void setGenFitMeasurementResolution(double v) { m_genfitMeasurementResolution = v; }
   void setT0(double v) { m_t0 = v; }
   void setTpcAdcClock(double v) { m_tpcAdcClock = v; }
   void setReverseDriftStepNs(double v) { m_reverseDriftStepNs = v; }
@@ -80,13 +77,10 @@ class TpcPolyClusterizer : public SubsysReco
   TrkrHitSetContainer* m_hits {nullptr};
   IdealPadMap* m_idealPadMap {nullptr};
   PHGarfield* m_garfield {nullptr};
-  std::shared_ptr<PHGenFit::Fitter> m_genfitFitter;
   unsigned int m_event {0};
   double m_t0 {6};
   double m_tpcAdcClock {56.881262};
   double m_reverseDriftStepNs {56.881262};
   double m_startZSouth {-102.325};
   double m_startZNorth {102.325};
-  int m_genfitParticleId {-13};
-  double m_genfitMeasurementResolution {0.2};
 };
