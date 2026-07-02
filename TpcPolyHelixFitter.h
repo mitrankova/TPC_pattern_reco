@@ -10,6 +10,7 @@ class TpcPolyHelixFitter
     double x {0.0};
     double y {0.0};
     double z {0.0};
+    double w {1.0};
   };
 
   struct Seed
