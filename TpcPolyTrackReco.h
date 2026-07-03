@@ -10,6 +10,7 @@ class FullTrackContainer;
 class IdealPadMap;
 class PHCompositeNode;
 class PHGarfield;
+class TpcPolyHelixFitter;
 class TpcPolyTrackContainer;
 class TrkrHitSetContainer;
 
@@ -54,6 +55,7 @@ class TpcPolyTrackReco : public SubsysReco
   TrkrHitSetContainer* m_hits {nullptr};
   IdealPadMap* m_idealPadMap {nullptr};
   PHGarfield* m_garfield {nullptr};
+  TpcPolyHelixFitter* m_helixFitter {nullptr};
   unsigned int m_event {0};
   double m_t0 {6};//329.0
   double m_tpcAdcClock {56.881262};//50.037280//53.326184//56.881262

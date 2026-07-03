@@ -8,7 +8,8 @@ AM_LDFLAGS = \
   -pthread \
   -L$(libdir) \
   -L$(OFFLINE_MAIN)/lib \
-  -L$(OFFLINE_MAIN)/lib64
+  -L$(OFFLINE_MAIN)/lib64 \
+  -L$(ROOTSYS)/lib
 pkginclude_HEADERS = \
   InModuleTracks.h \
   InModuleTrack.h \
@@ -125,7 +126,9 @@ libInModuleTracks_la_LIBADD = \
   -lgenfit2exp \
   -lPHGenFit \
   -lphfield \
-  -lPHGarfield
+  -lPHGarfield \
+  -lMathCore \
+  -lMinuit2
 BUILT_SOURCES = \
   testexternals.cc \
   InModuleTrackDict.cc

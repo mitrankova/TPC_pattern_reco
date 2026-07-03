@@ -46,6 +46,8 @@ TpcPolyTrackReco::~TpcPolyTrackReco()
   m_idealPadMap = nullptr;
   delete m_garfield;
   m_garfield = nullptr;
+  delete m_helixFitter;
+  m_helixFitter = nullptr;
 }
 
 int TpcPolyTrackReco::InitRun(PHCompositeNode* topNode)
@@ -66,6 +68,14 @@ int TpcPolyTrackReco::InitRun(PHCompositeNode* topNode)
   if (m_garfield->InitRun(topNode) != Fun4AllReturnCodes::EVENT_OK)
   {
     std::cerr << Name() << "::InitRun - PHGarfield InitRun failed" << std::endl;
+    return Fun4AllReturnCodes::ABORTRUN;
+  }
+
+  delete m_helixFitter;
+  m_helixFitter = new TpcPolyHelixFitter();
+  if (!m_helixFitter->InitField(Verbosity()))
+  {
+    std::cerr << Name() << "::InitRun - failed to load FIELDMAP_TRACKING" << std::endl;
     return Fun4AllReturnCodes::ABORTRUN;
   }
 
@@ -197,7 +207,7 @@ bool TpcPolyTrackReco::make_xyz_point(TrkrDefs::hitsetkey hsk,
 int TpcPolyTrackReco::process_event(PHCompositeNode*)
 {
 //  std::cout<<"TpcPolyTrackReco::process_event!!!!!!"<<std::endl;
-  if (!m_fullTracks || !m_polyTracks) return Fun4AllReturnCodes::EVENT_OK;
+  if (!m_fullTracks || !m_polyTracks || !m_helixFitter) return Fun4AllReturnCodes::EVENT_OK;
   m_polyTracks->Reset();
 
   const unsigned int nfull = m_fullTracks->size();
@@ -227,7 +237,7 @@ int TpcPolyTrackReco::process_event(PHCompositeNode*)
     }
 
     TpcPolyHelixFitter::FitResult fit;
-    const bool fit_ok = TpcPolyHelixFitter::fit(fit_points, fit);
+    const bool fit_ok = m_helixFitter->fit(fit_points, fit);
 
     TpcPolyTrackv1* out = new TpcPolyTrackv1();
     out->set_event(m_event);
