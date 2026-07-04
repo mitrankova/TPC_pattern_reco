@@ -29,7 +29,18 @@
 #include <iostream>
 #include <limits>
 #include <map>
+#include <set>
 #include <vector>
+
+namespace
+{
+  double wrap_phi(double phi)
+  {
+    while (phi > M_PI) phi -= 2.0 * M_PI;
+    while (phi <= -M_PI) phi += 2.0 * M_PI;
+    return phi;
+  }
+}
 
 TpcPolyClusterizer::TpcPolyClusterizer(const std::string& name)
   : SubsysReco(name)
@@ -127,6 +138,7 @@ bool TpcPolyClusterizer::make_xyz_point(TrkrDefs::hitsetkey hsk,
   const unsigned int layer = TrkrDefs::getLayer(hsk);
   const unsigned int pad = TpcDefs::getPad(hk);
   const unsigned int tbin = TpcDefs::getTBin(hk);
+  const double adc = hit->getAdc();
   if (layer < 7 || layer > 54) return false;
 
   const double radius = m_idealPadMap->get_radius(layer);
@@ -180,10 +192,58 @@ bool TpcPolyClusterizer::make_xyz_point(TrkrDefs::hitsetkey hsk,
   p.hitsetkey = hsk;
   p.hitkey = hk;
   p.layer = layer;
+  p.pad = pad;
+  p.tbin = tbin;
+  p.adc = adc;
   p.x = x;
   p.y = y;
   p.z = z;
   return true;
+}
+
+TpcPolyClusterizer::ClusterParameters
+TpcPolyClusterizer::make_cluster_parameters(const std::vector<Point>& points,
+                                            const Centroid& centroid,
+                                            const int side) const
+{
+  ClusterParameters params;
+  if (points.empty() || !centroid.ok || !m_idealPadMap) return params;
+
+  std::set<unsigned int> pads;
+  std::set<unsigned int> tbins;
+  std::map<unsigned int, double> adc_by_pad;
+  for (const Point& p : points)
+  {
+    params.adc += p.adc;
+    pads.insert(p.pad);
+    tbins.insert(p.tbin);
+    adc_by_pad[p.pad] += p.adc;
+  }
+
+  params.phi_width = static_cast<unsigned int>(pads.size());
+  params.time_width = static_cast<unsigned int>(tbins.size());
+
+  unsigned int max_adc_pad = 0;
+  double max_adc = -std::numeric_limits<double>::max();
+  for (const auto& pad_adc : adc_by_pad)
+  {
+    if (pad_adc.second > max_adc)
+    {
+      max_adc = pad_adc.second;
+      max_adc_pad = pad_adc.first;
+    }
+  }
+
+  const unsigned int total_phibins = m_idealPadMap->get_total_phibins(centroid.layer);
+  const double pad_phi_width = total_phibins > 0U ? 2.0 * M_PI / static_cast<double>(total_phibins) : 0.0;
+  const double cluster_phi = std::atan2(centroid.y, centroid.x);
+  const double max_adc_phi = m_idealPadMap->get_phi(static_cast<unsigned int>(side), centroid.layer, max_adc_pad);
+  if (pad_phi_width > 0.0 && std::isfinite(cluster_phi) && std::isfinite(max_adc_phi))
+  {
+    params.phase = wrap_phi(cluster_phi - max_adc_phi) / pad_phi_width;
+  }
+
+  return params;
 }
 
 TpcPolyClusterizer::Centroid
@@ -223,6 +283,7 @@ TpcPolyClusterizer::make_centroid(const std::vector<Point>& points)
   c.rms_x = std::sqrt(sxx / n);
   c.rms_y = std::sqrt(syy / n);
   c.rms_z = std::sqrt(szz / n);
+  c.layer = points.front().layer;
   c.ok = std::isfinite(c.x) && std::isfinite(c.y) && std::isfinite(c.z);
   return c;
 }
@@ -261,8 +322,10 @@ int TpcPolyClusterizer::process_event(PHCompositeNode*)
       const Centroid centroid = make_centroid(points);
       if (!centroid.ok) continue;
 
+      const ClusterParameters params = make_cluster_parameters(points, centroid, full->get_side());
       out->add_cluster(layer, centroid.x, centroid.y, centroid.z,
-                       centroid.rms_x, centroid.rms_y, centroid.rms_z);
+                       centroid.rms_x, centroid.rms_y, centroid.rms_z,
+                       params.adc, params.phi_width, params.time_width, params.phase);
       for (const Point& p : points) out->add_hit_to_last_cluster(p.hitsetkey, p.hitkey, p.x, p.y, p.z);
       ++nclusters;
     }

@@ -31,6 +31,10 @@ class TpcPolyClusterTrackv1 : public TpcPolyClusterTrack
   double get_cluster_rms_x(unsigned int i) const override { return i < m_cluster_rms_x.size() ? m_cluster_rms_x[i] : 0.0; }
   double get_cluster_rms_y(unsigned int i) const override { return i < m_cluster_rms_y.size() ? m_cluster_rms_y[i] : 0.0; }
   double get_cluster_rms_z(unsigned int i) const override { return i < m_cluster_rms_z.size() ? m_cluster_rms_z[i] : 0.0; }
+  double get_cluster_adc(unsigned int i) const override { return i < m_cluster_adc.size() ? m_cluster_adc[i] : 0.0; }
+  unsigned int get_cluster_phi_width(unsigned int i) const override { return i < m_cluster_phi_width.size() ? m_cluster_phi_width[i] : 0; }
+  unsigned int get_cluster_time_width(unsigned int i) const override { return i < m_cluster_time_width.size() ? m_cluster_time_width[i] : 0; }
+  double get_cluster_phase(unsigned int i) const override { return i < m_cluster_phase.size() ? m_cluster_phase[i] : 0.0; }
   HitIndex get_cluster_hit_index(unsigned int icluster, unsigned int ihit) const override;
   double get_cluster_hit_x(unsigned int icluster, unsigned int ihit) const override;
   double get_cluster_hit_y(unsigned int icluster, unsigned int ihit) const override;
@@ -41,7 +45,9 @@ class TpcPolyClusterTrackv1 : public TpcPolyClusterTrack
   void set_source_full_track_id(unsigned int v) override { m_source_full_track_id = v; }
   void set_side(int v) override { m_side = v; }
   void add_cluster(unsigned int layer, double x, double y, double z,
-                   double rms_x, double rms_y, double rms_z) override;
+                   double rms_x, double rms_y, double rms_z,
+                   double adc = 0.0, unsigned int phi_width = 0,
+                   unsigned int time_width = 0, double phase = 0.0) override;
   void add_hit_to_last_cluster(TrkrDefs::hitsetkey hsk, TrkrDefs::hitkey hk,
                                double x, double y, double z) override;
 
@@ -62,11 +68,15 @@ class TpcPolyClusterTrackv1 : public TpcPolyClusterTrack
   std::vector<double> m_cluster_rms_x;
   std::vector<double> m_cluster_rms_y;
   std::vector<double> m_cluster_rms_z;
+  std::vector<double> m_cluster_adc;
+  std::vector<unsigned int> m_cluster_phi_width;
+  std::vector<unsigned int> m_cluster_time_width;
+  std::vector<double> m_cluster_phase;
 
   std::vector<HitIndex> m_hit_indices;
   std::vector<double> m_hit_x;
   std::vector<double> m_hit_y;
   std::vector<double> m_hit_z;
 
-  ClassDefOverride(TpcPolyClusterTrackv1, 1)
+  ClassDefOverride(TpcPolyClusterTrackv1, 2)
 };

@@ -34,6 +34,10 @@ class TpcPolyClusterTrack : public PHObject
   virtual double get_cluster_rms_x(unsigned int) const { return 0.0; }
   virtual double get_cluster_rms_y(unsigned int) const { return 0.0; }
   virtual double get_cluster_rms_z(unsigned int) const { return 0.0; }
+  virtual double get_cluster_adc(unsigned int) const { return 0.0; }
+  virtual unsigned int get_cluster_phi_width(unsigned int) const { return 0; }
+  virtual unsigned int get_cluster_time_width(unsigned int) const { return 0; }
+  virtual double get_cluster_phase(unsigned int) const { return 0.0; }
   virtual HitIndex get_cluster_hit_index(unsigned int, unsigned int) const { return {0, 0}; }
   virtual double get_cluster_hit_x(unsigned int, unsigned int) const { return 0.0; }
   virtual double get_cluster_hit_y(unsigned int, unsigned int) const { return 0.0; }
@@ -44,7 +48,9 @@ class TpcPolyClusterTrack : public PHObject
   virtual void set_source_full_track_id(unsigned int) {}
   virtual void set_side(int) {}
   virtual void add_cluster(unsigned int /*layer*/, double /*x*/, double /*y*/, double /*z*/,
-                           double /*rms_x*/, double /*rms_y*/, double /*rms_z*/) {}
+                           double /*rms_x*/, double /*rms_y*/, double /*rms_z*/,
+                           double /*adc*/ = 0.0, unsigned int /*phi_width*/ = 0,
+                           unsigned int /*time_width*/ = 0, double /*phase*/ = 0.0) {}
   virtual void add_hit_to_last_cluster(TrkrDefs::hitsetkey, TrkrDefs::hitkey,
                                        double /*x*/, double /*y*/, double /*z*/) {}
 

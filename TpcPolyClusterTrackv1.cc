@@ -37,6 +37,10 @@ void TpcPolyClusterTrackv1::Reset()
   m_cluster_rms_x.clear();
   m_cluster_rms_y.clear();
   m_cluster_rms_z.clear();
+  m_cluster_adc.clear();
+  m_cluster_phi_width.clear();
+  m_cluster_time_width.clear();
+  m_cluster_phase.clear();
   m_hit_indices.clear();
   m_hit_x.clear();
   m_hit_y.clear();
@@ -54,7 +58,11 @@ void TpcPolyClusterTrackv1::add_cluster(const unsigned int layer,
                                         const double z,
                                         const double rms_x,
                                         const double rms_y,
-                                        const double rms_z)
+                                        const double rms_z,
+                                        const double adc,
+                                        const unsigned int phi_width,
+                                        const unsigned int time_width,
+                                        const double phase)
 {
   m_cluster_layer.push_back(layer);
   m_cluster_first_hit.push_back(static_cast<unsigned int>(m_hit_indices.size()));
@@ -65,6 +73,10 @@ void TpcPolyClusterTrackv1::add_cluster(const unsigned int layer,
   m_cluster_rms_x.push_back(rms_x);
   m_cluster_rms_y.push_back(rms_y);
   m_cluster_rms_z.push_back(rms_z);
+  m_cluster_adc.push_back(adc);
+  m_cluster_phi_width.push_back(phi_width);
+  m_cluster_time_width.push_back(time_width);
+  m_cluster_phase.push_back(phase);
 }
 
 void TpcPolyClusterTrackv1::add_hit_to_last_cluster(const TrkrDefs::hitsetkey hsk,
