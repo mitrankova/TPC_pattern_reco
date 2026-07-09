@@ -26,10 +26,12 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <iostream>
 #include <limits>
 #include <map>
 #include <set>
+#include <thread>
 #include <vector>
 
 namespace
@@ -55,6 +57,8 @@ TpcPolyClusterizer::~TpcPolyClusterizer()
   m_idealPadMap = nullptr;
   delete m_garfield;
   m_garfield = nullptr;
+  for (PHGarfield* garfield : m_workerGarfields) delete garfield;
+  m_workerGarfields.clear();
 }
 
 int TpcPolyClusterizer::InitRun(PHCompositeNode* topNode)
@@ -76,6 +80,21 @@ int TpcPolyClusterizer::InitRun(PHCompositeNode* topNode)
   {
     std::cerr << Name() << "::InitRun - PHGarfield InitRun failed" << std::endl;
     return Fun4AllReturnCodes::ABORTRUN;
+  }
+
+  for (PHGarfield* garfield : m_workerGarfields) delete garfield;
+  m_workerGarfields.clear();
+  m_workerGarfields.reserve(24);
+  for (unsigned int i = 0; i < 24; ++i)
+  {
+    PHGarfield* worker = new PHGarfield(Name() + "_PHGarfieldWorker" + std::to_string(i));
+    if (worker->InitRun(topNode) != Fun4AllReturnCodes::EVENT_OK)
+    {
+      std::cerr << Name() << "::InitRun - PHGarfield worker InitRun failed" << std::endl;
+      delete worker;
+      return Fun4AllReturnCodes::ABORTRUN;
+    }
+    m_workerGarfields.push_back(worker);
   }
 
   m_event = 0;
@@ -125,9 +144,10 @@ int TpcPolyClusterizer::createNodes(PHCompositeNode* topNode)
 
 bool TpcPolyClusterizer::make_xyz_point(TrkrDefs::hitsetkey hsk,
                                         TrkrDefs::hitkey hk,
+                                        PHGarfield* garfield,
                                         Point& p) const
 {
-  if (!m_hits || !m_idealPadMap || !m_garfield) return false;
+  if (!m_hits || !m_idealPadMap || !garfield) return false;
 
   TrkrHitSet* hitset = m_hits->findHitSet(hsk);
   if (!hitset) return false;
@@ -155,7 +175,7 @@ bool TpcPolyClusterizer::make_xyz_point(TrkrDefs::hitsetkey hsk,
   const double y0 = radius * std::sin(phi);
   const double z0 = (hit_side == 0U) ? m_startZSouth : m_startZNorth;
 
-  TPolyLine3D* drift = m_garfield->ReverseDrift(x0, y0, z0, m_reverseDriftStepNs);
+  TPolyLine3D* drift = garfield->ReverseDrift(x0, y0, z0, m_reverseDriftStepNs);
   if (!drift || drift->GetN() <= 0)
   {
     delete drift;
@@ -290,34 +310,38 @@ TpcPolyClusterizer::make_centroid(const std::vector<Point>& points)
   return c;
 }
 
-int TpcPolyClusterizer::process_event(PHCompositeNode*)
+void TpcPolyClusterizer::cluster_sector_side(unsigned int sector,
+                                              int side,
+                                              PHGarfield* garfield,
+                                              std::vector<ClusterizedTrack>& output,
+                                              unsigned int& nclusters) const
 {
-  if (!m_fullTracks || !m_clusterTracks) return Fun4AllReturnCodes::EVENT_OK;
-  m_clusterTracks->Reset();
+  output.clear();
+  nclusters = 0;
+  if (!m_fullTracks || !garfield) return;
 
   const unsigned int nfull = m_fullTracks->size();
-  unsigned int nclusters = 0;
   for (unsigned int ifull = 0; ifull < nfull; ++ifull)
   {
     const FullTrack* full = m_fullTracks->get_track(ifull);
     if (!full) continue;
+    if (full->get_side() != side) continue;
+    if (full->get_first_sector() % 12U != sector) continue;
 
     std::map<unsigned int, std::vector<Point>> points_by_layer;
     for (unsigned int ih = 0; ih < full->size_hit_indices(); ++ih)
     {
       const FullTrack::HitIndex hi = full->get_hit_index(ih);
+      if (TpcDefs::getSide(hi.first) != static_cast<unsigned int>(side)) continue;
+
       Point p;
-      if (make_xyz_point(hi.first, hi.second, p)) points_by_layer[p.layer].push_back(p);
+      if (make_xyz_point(hi.first, hi.second, garfield, p)) points_by_layer[p.layer].push_back(p);
     }
     if (points_by_layer.empty()) continue;
 
-    const int track_side = static_cast<int>(points_by_layer.begin()->second.front().side);
-
-    TpcPolyClusterTrackv1* out = new TpcPolyClusterTrackv1();
-    out->set_event(m_event);
-    out->set_track_id(m_clusterTracks->size());
-    out->set_source_full_track_id(full->get_track_id());
-    out->set_side(track_side);
+    ClusterizedTrack out;
+    out.source_full_track_id = full->get_track_id();
+    out.side = side;
 
     for (const auto& layer_points : points_by_layer)
     {
@@ -327,19 +351,71 @@ int TpcPolyClusterizer::process_event(PHCompositeNode*)
       if (!centroid.ok) continue;
 
       const ClusterParameters params = make_cluster_parameters(points, centroid, static_cast<int>(points.front().side));
-      out->add_cluster(layer, centroid.x, centroid.y, centroid.z,
-                       centroid.rms_x, centroid.rms_y, centroid.rms_z,
-                       params.adc, params.phi_width, params.time_width, params.phase);
-      for (const Point& p : points) out->add_hit_to_last_cluster(p.hitsetkey, p.hitkey, p.x, p.y, p.z);
+      out.layers.push_back(layer);
+      out.centroids.push_back(centroid);
+      out.parameters.push_back(params);
+      out.cluster_points.push_back(points);
       ++nclusters;
     }
 
-    if (out->size_clusters() == 0)
+    if (!out.layers.empty()) output.push_back(out);
+  }
+}
+
+int TpcPolyClusterizer::process_event(PHCompositeNode*)
+{
+  if (!m_fullTracks || !m_clusterTracks) return Fun4AllReturnCodes::EVENT_OK;
+  m_clusterTracks->Reset();
+
+  const unsigned int nfull = m_fullTracks->size();
+  std::vector<std::vector<ClusterizedTrack>> sector_outputs(24);
+  std::vector<unsigned int> sector_nclusters(24, 0);
+  std::vector<std::thread> workers;
+  workers.reserve(24);
+
+  for (int side = 0; side < 2; ++side)
+  {
+    for (unsigned int sector = 0; sector < 12; ++sector)
     {
-      delete out;
-      continue;
+      const unsigned int index = static_cast<unsigned int>(side) * 12U + sector;
+      PHGarfield* garfield = index < m_workerGarfields.size() ? m_workerGarfields[index] : m_garfield;
+      workers.push_back(std::thread(&TpcPolyClusterizer::cluster_sector_side, this,
+                                    sector, side, garfield,
+                                    std::ref(sector_outputs[index]),
+                                    std::ref(sector_nclusters[index])));
     }
-    m_clusterTracks->add_track(out);
+  }
+  for (std::thread& worker : workers) worker.join();
+
+  unsigned int nclusters = 0;
+  for (unsigned int index = 0; index < sector_outputs.size(); ++index)
+  {
+    nclusters += sector_nclusters[index];
+    for (const ClusterizedTrack& clustered : sector_outputs[index])
+    {
+      TpcPolyClusterTrackv1* out = new TpcPolyClusterTrackv1();
+      out->set_event(m_event);
+      out->set_track_id(m_clusterTracks->size());
+      out->set_source_full_track_id(clustered.source_full_track_id);
+      out->set_side(clustered.side);
+
+      for (unsigned int ic = 0; ic < clustered.layers.size(); ++ic)
+      {
+        const Centroid& centroid = clustered.centroids[ic];
+        const ClusterParameters& params = clustered.parameters[ic];
+        out->add_cluster(clustered.layers[ic], centroid.x, centroid.y, centroid.z,
+                         centroid.rms_x, centroid.rms_y, centroid.rms_z,
+                         params.adc, params.phi_width, params.time_width, params.phase);
+        for (const Point& p : clustered.cluster_points[ic]) out->add_hit_to_last_cluster(p.hitsetkey, p.hitkey, p.x, p.y, p.z);
+      }
+
+      if (out->size_clusters() == 0)
+      {
+        delete out;
+        continue;
+      }
+      m_clusterTracks->add_track(out);
+    }
   }
 
   if (Verbosity() > 0)
