@@ -92,7 +92,8 @@ void TpcPolyClusterTrackReco::fillFinalTrack(const TpcPolyClusterTrack* in,
     const double tan_theta = std::tan(fit.theta);
     out->set_px(pt * cos_phi);
     out->set_py(pt * sin_phi);
-    out->set_pz(std::fabs(tan_theta) > 1.0e-12 ? pt / tan_theta : 0.0);
+    const double pz = std::fabs(tan_theta) > 1.0e-12 ? (pt / tan_theta) : 0.0;
+    out->set_pz(pz);
     out->set_charge(fit.curvature >= 0.0 ? -1.0 : 1.0);
     out->set_chi2(fit.chi2_xy + fit.chi2_z);
     out->set_ndf(static_cast<double>(fit.ndof_xy + fit.ndof_z));

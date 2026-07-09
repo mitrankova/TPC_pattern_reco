@@ -125,7 +125,6 @@ int TpcPolyClusterizer::createNodes(PHCompositeNode* topNode)
 
 bool TpcPolyClusterizer::make_xyz_point(TrkrDefs::hitsetkey hsk,
                                         TrkrDefs::hitkey hk,
-                                        int side,
                                         Point& p) const
 {
   if (!m_hits || !m_idealPadMap || !m_garfield) return false;
@@ -136,13 +135,15 @@ bool TpcPolyClusterizer::make_xyz_point(TrkrDefs::hitsetkey hsk,
   if (!hit) return false;
 
   const unsigned int layer = TrkrDefs::getLayer(hsk);
+  const unsigned int hit_side = TpcDefs::getSide(hsk);
   const unsigned int pad = TpcDefs::getPad(hk);
   const unsigned int tbin = TpcDefs::getTBin(hk);
   const double adc = hit->getAdc();
   if (layer < 7 || layer > 54) return false;
+  if (hit_side >= 2U) return false;
 
   const double radius = m_idealPadMap->get_radius(layer);
-  const double phi = m_idealPadMap->get_phi(static_cast<unsigned int>(side), layer, pad);
+  const double phi = m_idealPadMap->get_phi(hit_side, layer, pad);
   if (!std::isfinite(radius) || !std::isfinite(phi)) return false;
 
   const double corrected_tbin = static_cast<double>(tbin) - m_t0;
@@ -152,7 +153,7 @@ bool TpcPolyClusterizer::make_xyz_point(TrkrDefs::hitsetkey hsk,
 
   const double x0 = radius * std::cos(phi);
   const double y0 = radius * std::sin(phi);
-  const double z0 = (side == 0) ? m_startZSouth : m_startZNorth;
+  const double z0 = (hit_side == 0U) ? m_startZSouth : m_startZNorth;
 
   TPolyLine3D* drift = m_garfield->ReverseDrift(x0, y0, z0, m_reverseDriftStepNs);
   if (!drift || drift->GetN() <= 0)
@@ -192,6 +193,7 @@ bool TpcPolyClusterizer::make_xyz_point(TrkrDefs::hitsetkey hsk,
   p.hitsetkey = hsk;
   p.hitkey = hk;
   p.layer = layer;
+  p.side = hit_side;
   p.pad = pad;
   p.tbin = tbin;
   p.adc = adc;
@@ -305,15 +307,17 @@ int TpcPolyClusterizer::process_event(PHCompositeNode*)
     {
       const FullTrack::HitIndex hi = full->get_hit_index(ih);
       Point p;
-      if (make_xyz_point(hi.first, hi.second, full->get_side(), p)) points_by_layer[p.layer].push_back(p);
+      if (make_xyz_point(hi.first, hi.second, p)) points_by_layer[p.layer].push_back(p);
     }
     if (points_by_layer.empty()) continue;
+
+    const int track_side = static_cast<int>(points_by_layer.begin()->second.front().side);
 
     TpcPolyClusterTrackv1* out = new TpcPolyClusterTrackv1();
     out->set_event(m_event);
     out->set_track_id(m_clusterTracks->size());
     out->set_source_full_track_id(full->get_track_id());
-    out->set_side(full->get_side());
+    out->set_side(track_side);
 
     for (const auto& layer_points : points_by_layer)
     {
@@ -322,7 +326,7 @@ int TpcPolyClusterizer::process_event(PHCompositeNode*)
       const Centroid centroid = make_centroid(points);
       if (!centroid.ok) continue;
 
-      const ClusterParameters params = make_cluster_parameters(points, centroid, full->get_side());
+      const ClusterParameters params = make_cluster_parameters(points, centroid, static_cast<int>(points.front().side));
       out->add_cluster(layer, centroid.x, centroid.y, centroid.z,
                        centroid.rms_x, centroid.rms_y, centroid.rms_z,
                        params.adc, params.phi_width, params.time_width, params.phase);

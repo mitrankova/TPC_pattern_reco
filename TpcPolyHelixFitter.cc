@@ -120,15 +120,8 @@ bool TpcPolyHelixFitter::fit(const std::vector<Point>& points, FitResult& fit)
   const double py = yc * (1.0 - R / dc);
   const double rx = px - xc;
   const double ry = py - yc;
-  double tx = -sign * ry / R;
-  double ty =  sign * rx / R;
-  const double dxfl = last.x - first.x;
-  const double dyfl = last.y - first.y;
-  if (tx * dxfl + ty * dyfl < 0.0)
-  {
-    tx = -tx;
-    ty = -ty;
-  }
+  const double tx = -sign * ry / R;
+  const double ty =  sign * rx / R;
   fit.phi0 = wrap_pi(std::atan2(ty, tx));
 
   const double phi_perigee = std::atan2(ry, rx);
@@ -144,7 +137,7 @@ bool TpcPolyHelixFitter::fit(const std::vector<Point>& points, FitResult& fit)
     prev_angle = angle;
     double dangle = angle - phi_perigee;
     if (sign * dangle < 0.0) dangle += sign * 2.0 * M_PI;
-    svals.push_back(R * dangle);
+    svals.push_back(std::fabs(R * dangle));
     zvals.push_back(p.z);
 
     const double resid = std::hypot(p.x - xc, p.y - yc) - R;
