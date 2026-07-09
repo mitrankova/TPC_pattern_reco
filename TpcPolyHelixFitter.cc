@@ -78,6 +78,115 @@ namespace
   }
 }
 
+
+bool TpcPolyHelixFitter::fitLine3D(const std::vector<Point>& points, FitResult& fit)
+{
+  fit = FitResult();
+  fit.is_line = true;
+  if (points.size() < 2) return false;
+
+  double cx = 0.0;
+  double cy = 0.0;
+  double cz = 0.0;
+  for (const Point& p : points)
+  {
+    cx += p.x;
+    cy += p.y;
+    cz += p.z;
+  }
+  const double inv_n = 1.0 / static_cast<double>(points.size());
+  cx *= inv_n;
+  cy *= inv_n;
+  cz *= inv_n;
+
+  double cov[3][3] = {{0.0, 0.0, 0.0}, {0.0, 0.0, 0.0}, {0.0, 0.0, 0.0}};
+  for (const Point& p : points)
+  {
+    const double dx = p.x - cx;
+    const double dy = p.y - cy;
+    const double dz = p.z - cz;
+    cov[0][0] += dx * dx;
+    cov[0][1] += dx * dy;
+    cov[0][2] += dx * dz;
+    cov[1][1] += dy * dy;
+    cov[1][2] += dy * dz;
+    cov[2][2] += dz * dz;
+  }
+  cov[1][0] = cov[0][1];
+  cov[2][0] = cov[0][2];
+  cov[2][1] = cov[1][2];
+
+  double vx = points.back().x - points.front().x;
+  double vy = points.back().y - points.front().y;
+  double vz = points.back().z - points.front().z;
+  double vnorm = std::sqrt(vx * vx + vy * vy + vz * vz);
+  if (vnorm <= 1.0e-20)
+  {
+    for (const Point& p : points)
+    {
+      vx = p.x - cx;
+      vy = p.y - cy;
+      vz = p.z - cz;
+      vnorm = std::sqrt(vx * vx + vy * vy + vz * vz);
+      if (vnorm > 1.0e-20) break;
+    }
+  }
+  if (vnorm <= 1.0e-20) return false;
+  vx /= vnorm;
+  vy /= vnorm;
+  vz /= vnorm;
+
+  for (unsigned int iter = 0; iter < 32; ++iter)
+  {
+    const double nx = cov[0][0] * vx + cov[0][1] * vy + cov[0][2] * vz;
+    const double ny = cov[1][0] * vx + cov[1][1] * vy + cov[1][2] * vz;
+    const double nz = cov[2][0] * vx + cov[2][1] * vy + cov[2][2] * vz;
+    const double nnorm = std::sqrt(nx * nx + ny * ny + nz * nz);
+    if (nnorm <= 1.0e-20) return false;
+    vx = nx / nnorm;
+    vy = ny / nnorm;
+    vz = nz / nnorm;
+  }
+
+  const double ex = points.back().x - points.front().x;
+  const double ey = points.back().y - points.front().y;
+  const double ez = points.back().z - points.front().z;
+  if (vx * ex + vy * ey + vz * ez < 0.0)
+  {
+    vx = -vx;
+    vy = -vy;
+    vz = -vz;
+  }
+
+  const double cproj = cx * vx + cy * vy + cz * vz;
+  fit.line_x = cx - cproj * vx;
+  fit.line_y = cy - cproj * vy;
+  fit.line_z = cz - cproj * vz;
+  fit.line_dx = vx;
+  fit.line_dy = vy;
+  fit.line_dz = vz;
+  fit.phi0 = wrap_pi(std::atan2(vy, vx));
+  fit.theta = std::atan2(std::sqrt(vx * vx + vy * vy), vz);
+  fit.d0 = -fit.line_x * std::sin(fit.phi0) + fit.line_y * std::cos(fit.phi0);
+  fit.z0 = fit.line_z;
+  fit.curvature = 0.0;
+
+  for (const Point& p : points)
+  {
+    const double dx = p.x - fit.line_x;
+    const double dy = p.y - fit.line_y;
+    const double dz = p.z - fit.line_z;
+    const double along = dx * vx + dy * vy + dz * vz;
+    const double rx = dx - along * vx;
+    const double ry = dy - along * vy;
+    const double rz = dz - along * vz;
+    fit.chi2_xy += rx * rx + ry * ry + rz * rz;
+  }
+  fit.ndof_xy = std::max(0, 2 * static_cast<int>(points.size()) - 4);
+  fit.ok = true;
+  return true;
+}
+
 bool TpcPolyHelixFitter::fit(const std::vector<Point>& points, FitResult& fit)
 {
   fit = FitResult();
