@@ -39,6 +39,7 @@ class TpcPolyClusterizer : public SubsysReco
     TrkrDefs::hitsetkey hitsetkey {0};
     TrkrDefs::hitkey hitkey {0};
     unsigned int layer {0};
+    unsigned int side {0};
     unsigned int pad {0};
     unsigned int tbin {0};
     double adc {0.0};
@@ -69,7 +70,7 @@ class TpcPolyClusterizer : public SubsysReco
 
   int getNodes(PHCompositeNode*);
   int createNodes(PHCompositeNode*);
-  bool make_xyz_point(TrkrDefs::hitsetkey hsk, TrkrDefs::hitkey hk, int side, Point& p) const;
+  bool make_xyz_point(TrkrDefs::hitsetkey hsk, TrkrDefs::hitkey hk, Point& p) const;
   ClusterParameters make_cluster_parameters(const std::vector<Point>& points, const Centroid& centroid, int side) const;
   static Centroid make_centroid(const std::vector<Point>& points);
 
