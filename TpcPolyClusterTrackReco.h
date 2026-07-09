@@ -14,6 +14,12 @@ class TpcPolyClusterTrackContainer;
 class TpcPolyClusterTrackReco : public SubsysReco
 {
  public:
+  enum class FitMode
+  {
+    Helix,
+    Line3D
+  };
+
   explicit TpcPolyClusterTrackReco(const std::string& name = "TpcPolyClusterTrackReco");
   ~TpcPolyClusterTrackReco() override = default;
 
@@ -23,6 +29,8 @@ class TpcPolyClusterTrackReco : public SubsysReco
   void setInputNodeName(const std::string& n) { m_inputNodeName = n; }
   void setOutputNodeName(const std::string& n) { m_outputNodeName = n; }
   void setMagneticFieldTesla(double v) { m_magneticFieldTesla = v; }
+  void setFitMode(FitMode mode) { m_fitMode = mode; }
+  void setUseLine3DFit(bool v) { m_fitMode = v ? FitMode::Line3D : FitMode::Helix; }
 
  private:
   int getNodes(PHCompositeNode*);
@@ -37,4 +45,5 @@ class TpcPolyClusterTrackReco : public SubsysReco
   FinalTrackContainer* m_finalTracks {nullptr};
   unsigned int m_event {0};
   double m_magneticFieldTesla {1.4};
+  FitMode m_fitMode {FitMode::Helix};
 };

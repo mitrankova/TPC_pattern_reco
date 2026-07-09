@@ -81,20 +81,33 @@ void TpcPolyClusterTrackReco::fillFinalTrack(const TpcPolyClusterTrack* in,
 
   if (fit_ok)
   {
-    const double sin_phi = std::sin(fit.phi0);
-    const double cos_phi = std::cos(fit.phi0);
-    out->set_x(-fit.d0 * sin_phi);
-    out->set_y(fit.d0 * cos_phi);
-    out->set_z(fit.z0);
+    if (fit.is_line)
+    {
+      out->set_x(fit.line_x);
+      out->set_y(fit.line_y);
+      out->set_z(fit.line_z);
+      out->set_px(fit.line_dx);
+      out->set_py(fit.line_dy);
+      out->set_pz(fit.line_dz);
+      out->set_charge(0.0);
+    }
+    else
+    {
+      const double sin_phi = std::sin(fit.phi0);
+      const double cos_phi = std::cos(fit.phi0);
+      out->set_x(-fit.d0 * sin_phi);
+      out->set_y(fit.d0 * cos_phi);
+      out->set_z(fit.z0);
 
-    const double abs_curvature = std::fabs(fit.curvature);
-    const double pt = abs_curvature > 0.0 ? 0.003 * std::fabs(m_magneticFieldTesla) / abs_curvature : 0.0;
-    const double tan_theta = std::tan(fit.theta);
-    out->set_px(pt * cos_phi);
-    out->set_py(pt * sin_phi);
-    const double pz = std::fabs(tan_theta) > 1.0e-12 ? (pt / tan_theta) : 0.0;
-    out->set_pz(pz);
-    out->set_charge(fit.curvature >= 0.0 ? -1.0 : 1.0);
+      const double abs_curvature = std::fabs(fit.curvature);
+      const double pt = abs_curvature > 0.0 ? 0.003 * std::fabs(m_magneticFieldTesla) / abs_curvature : 0.0;
+      const double tan_theta = std::tan(fit.theta);
+      out->set_px(pt * cos_phi);
+      out->set_py(pt * sin_phi);
+      const double pz = std::fabs(tan_theta) > 1.0e-12 ? (pt / tan_theta) : 0.0;
+      out->set_pz(pz);
+      out->set_charge(fit.curvature >= 0.0 ? -1.0 : 1.0);
+    }
     out->set_chi2(fit.chi2_xy + fit.chi2_z);
     out->set_ndf(static_cast<double>(fit.ndof_xy + fit.ndof_z));
   }
@@ -133,7 +146,9 @@ int TpcPolyClusterTrackReco::process_event(PHCompositeNode* topNode)
     }
 
     TpcPolyHelixFitter::FitResult fit;
-    const bool fit_ok = TpcPolyHelixFitter::fit(fit_points, fit);
+    const bool fit_ok = (m_fitMode == FitMode::Line3D) ?
+      TpcPolyHelixFitter::fitLine3D(fit_points, fit) :
+      TpcPolyHelixFitter::fit(fit_points, fit);
     fillFinalTrack(cluster_track, fit, fit_ok);
   }
 
