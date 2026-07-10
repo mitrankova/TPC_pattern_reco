@@ -28,6 +28,7 @@ class FinalTrack : public PHObject
   virtual double get_charge() const { return 0.0; }
   virtual double get_chi2() const { return 0.0; }
   virtual double get_ndf() const { return 0.0; }
+  virtual double get_dedx() const { return 0.0; }
   virtual double get_cov(unsigned int, unsigned int) const { return 0.0; }
 
   virtual void set_event(unsigned int) {}
@@ -44,6 +45,7 @@ class FinalTrack : public PHObject
   virtual void set_charge(double) {}
   virtual void set_chi2(double) {}
   virtual void set_ndf(double) {}
+  virtual void set_dedx(double) {}
   virtual void set_cov(unsigned int, unsigned int, double) {}
 
  private:

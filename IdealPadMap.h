@@ -26,6 +26,7 @@ class IdealPadMap
   // Radius from CDB, averaged over all pads in that layer. Returned in cm.
   double get_radius(unsigned int layer) const;
   double get_local_radius(unsigned int layer) const { return get_radius(layer); }
+  double get_layer_thickness(unsigned int layer) const;
 
   // Raw local CDB phi for one pad inside one sector.
   // local_phibin is 0..pads_per_sector(layer)-1.

@@ -1,6 +1,7 @@
 #include "FinalTrackv1.h"
 
 #include <cmath>
+#include <limits>
 
 ClassImp(FinalTrackv1)
 
@@ -22,6 +23,7 @@ void FinalTrackv1::identify(std::ostream& os) const
      << " charge=" << m_charge
      << " chi2=" << m_chi2
      << " ndf=" << m_ndf
+     << " dedx=" << m_dedx
      << std::endl;
 }
 
@@ -41,6 +43,7 @@ void FinalTrackv1::Reset()
   m_charge = 0.0;
   m_chi2 = 0.0;
   m_ndf = 0.0;
+  m_dedx = std::numeric_limits<double>::quiet_NaN();
   m_cov.assign(36, 0.0);
 }
 

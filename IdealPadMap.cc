@@ -147,6 +147,23 @@ double IdealPadMap::get_radius(const unsigned int layer) const
   return m_radius_cm_by_layer[ilayer];
 }
 
+double IdealPadMap::get_layer_thickness(const unsigned int layer) const
+{
+  const int ilayer = layer_index(layer);
+  if (ilayer < 0) return std::numeric_limits<double>::quiet_NaN();
+
+  if (ilayer == 0)
+  {
+    return m_radius_cm_by_layer[1] - m_radius_cm_by_layer[0];
+  }
+  if (ilayer == static_cast<int>(N_LAYERS - 1))
+  {
+    return m_radius_cm_by_layer[N_LAYERS - 1] - m_radius_cm_by_layer[N_LAYERS - 2];
+  }
+
+  return 0.5 * (m_radius_cm_by_layer[ilayer + 1] - m_radius_cm_by_layer[ilayer - 1]);
+}
+
 double IdealPadMap::get_cdb_local_phi(const unsigned int layer,
                                       const unsigned int local_phibin) const
 {

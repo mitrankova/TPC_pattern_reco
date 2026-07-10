@@ -30,6 +30,7 @@ class FinalTrackv1 : public FinalTrack
   double get_charge() const override { return m_charge; }
   double get_chi2() const override { return m_chi2; }
   double get_ndf() const override { return m_ndf; }
+  double get_dedx() const override { return m_dedx; }
   double get_cov(unsigned int i, unsigned int j) const override
   {
     const unsigned int idx = 6 * i + j;
@@ -51,6 +52,7 @@ class FinalTrackv1 : public FinalTrack
   void set_charge(double v) override { m_charge = v; }
   void set_chi2(double v) override { m_chi2 = v; }
   void set_ndf(double v) override { m_ndf = v; }
+  void set_dedx(double v) override { m_dedx = v; }
   void set_cov(unsigned int i, unsigned int j, double v) override
   {
     if (i >= 6 || j >= 6) return;
@@ -74,7 +76,8 @@ class FinalTrackv1 : public FinalTrack
   double m_charge {0.0};
   double m_chi2 {0.0};
   double m_ndf {0.0};
+  double m_dedx {0.0};
   std::vector<double> m_cov;
 
-  ClassDefOverride(FinalTrackv1, 1)
+  ClassDefOverride(FinalTrackv1, 2)
 };
