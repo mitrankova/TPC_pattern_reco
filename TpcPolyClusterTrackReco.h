@@ -7,6 +7,7 @@
 #include <string>
 
 class FinalTrackContainer;
+class IdealPadMap;
 class PHCompositeNode;
 class TpcPolyClusterTrack;
 class TpcPolyClusterTrackContainer;
@@ -21,7 +22,7 @@ class TpcPolyClusterTrackReco : public SubsysReco
   };
 
   explicit TpcPolyClusterTrackReco(const std::string& name = "TpcPolyClusterTrackReco");
-  ~TpcPolyClusterTrackReco() override = default;
+  ~TpcPolyClusterTrackReco() override;
 
   int InitRun(PHCompositeNode*) override;
   int process_event(PHCompositeNode*) override;
@@ -35,6 +36,9 @@ class TpcPolyClusterTrackReco : public SubsysReco
  private:
   int getNodes(PHCompositeNode*);
   int createNodes(PHCompositeNode*);
+  double calc_dedx(const TpcPolyClusterTrack* track,
+                   const TpcPolyHelixFitter::FitResult& fit,
+                   bool fit_ok) const;
   void fillFinalTrack(const TpcPolyClusterTrack* in,
                       const TpcPolyHelixFitter::FitResult& fit,
                       bool fit_ok);
@@ -43,6 +47,7 @@ class TpcPolyClusterTrackReco : public SubsysReco
   std::string m_outputNodeName;
   TpcPolyClusterTrackContainer* m_clusterTracks {nullptr};
   FinalTrackContainer* m_finalTracks {nullptr};
+  IdealPadMap* m_idealPadMap {nullptr};
   unsigned int m_event {0};
   double m_magneticFieldTesla {1.4};
   FitMode m_fitMode {FitMode::Helix};

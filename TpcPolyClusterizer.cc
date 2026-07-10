@@ -20,8 +20,8 @@
 #include <trackbase/TrkrHitSet.h>
 #include <trackbase/TrkrHitSetContainer.h>
 
-#include <phgarfield/PHGarfield.h>
-
+//#include <phgarfield/PHGarfield.h>
+#include </sphenix/user/mitrankova/F4A/PHGarfield/install/include/phgarfield/PHGarfield.h>
 #include <TPolyLine3D.h>
 
 #include <algorithm>
@@ -75,7 +75,25 @@ int TpcPolyClusterizer::InitRun(PHCompositeNode* topNode)
   }
 
   delete m_garfield;
-  m_garfield = new PHGarfield(Name() + "_PHGarfield");
+  //m_garfield = new PHGarfield(Name() + "_PHGarfield");
+
+  const std::string electricFieldMap = "/sphenix/user/mitrankov/garf/include/sphenix_rossegger_garfield_field.root";
+  const double k_eff_side0 = 0.;
+  const double k_eff_side1 = 0.;
+
+  m_garfield = new PHGarfield(Name() + "_PHGarfield", electricFieldMap, k_eff_side0, k_eff_side1);
+/*
+  TVector3 Northxyz; Northxyz.SetXYZ(3.34, -8.37,  1137.382);//(-0.001, -0.001,  1123.109);//mm
+  TVector3 Southxyz; Southxyz.SetXYZ(-0., -0.,  -1123.109);//-3.354, -0.673, -1137.382);//mm
+  TVector3 center=0.5*(Northxyz+Southxyz);//0.5 to get the center of the TPC
+  center*=0.1;//to cm
+  //center.SetXYZ(0,0,30);
+  m_garfield->MoveTpc(center.X(),center.Y(),center.Z());
+  m_garfield->RotateTpc(0,0.01485/10,0);//per JohnH
+  m_garfield->RotateTpc(0.0298/8,0,0);//per JohnH
+  */
+ // m_garfield->SetCMVoltageDefault(43280./102.3);//per grafana
+m_garfield->SetCMVoltageDefault(380);//per grafana
   if (m_garfield->InitRun(topNode) != Fun4AllReturnCodes::EVENT_OK)
   {
     std::cerr << Name() << "::InitRun - PHGarfield InitRun failed" << std::endl;
@@ -88,6 +106,8 @@ int TpcPolyClusterizer::InitRun(PHCompositeNode* topNode)
   for (unsigned int i = 0; i < 24; ++i)
   {
     PHGarfield* worker = new PHGarfield(Name() + "_PHGarfieldWorker" + std::to_string(i));
+    //worker->SetCMVoltageDefault(43280./102.3);//per grafana
+    worker->SetCMVoltageDefault(380);//per grafana
     if (worker->InitRun(topNode) != Fun4AllReturnCodes::EVENT_OK)
     {
       std::cerr << Name() << "::InitRun - PHGarfield worker InitRun failed" << std::endl;

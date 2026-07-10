@@ -2,11 +2,13 @@ AUTOMAKE_OPTIONS = foreign
 AM_CXXFLAGS = -pthread
 AM_CPPFLAGS = \
   -I$(top_srcdir) \
+  -isystem/sphenix/user/mitrankova/F4A/PHGarfield/install/include \
   -isystem$(OFFLINE_MAIN)/include \
   -isystem$(ROOTSYS)/include
 AM_LDFLAGS = \
   -pthread \
   -L$(libdir) \
+  -L/sphenix/user/mitrankova/F4A/PHGarfield/install/lib \
   -L$(OFFLINE_MAIN)/lib \
   -L$(OFFLINE_MAIN)/lib64
 pkginclude_HEADERS = \

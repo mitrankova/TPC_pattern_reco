@@ -2,6 +2,7 @@
 
 #include "FinalTrackContainerv1.h"
 #include "FinalTrackv1.h"
+#include "IdealPadMap.h"
 #include "TpcPolyClusterTrack.h"
 #include "TpcPolyClusterTrackContainer.h"
 #include "TpcPolyHelixFitter.h"
@@ -14,7 +15,9 @@
 #include <phool/PHObject.h>
 #include <phool/getClass.h>
 
+#include <algorithm>
 #include <cmath>
+#include <limits>
 #include <iostream>
 #include <vector>
 
@@ -25,13 +28,102 @@ TpcPolyClusterTrackReco::TpcPolyClusterTrackReco(const std::string& name)
 {
 }
 
+TpcPolyClusterTrackReco::~TpcPolyClusterTrackReco()
+{
+  delete m_idealPadMap;
+  m_idealPadMap = nullptr;
+}
+
 int TpcPolyClusterTrackReco::InitRun(PHCompositeNode* topNode)
 {
   if (getNodes(topNode) != Fun4AllReturnCodes::EVENT_OK) return Fun4AllReturnCodes::ABORTRUN;
   if (createNodes(topNode) != Fun4AllReturnCodes::EVENT_OK) return Fun4AllReturnCodes::ABORTRUN;
 
+  delete m_idealPadMap;
+  m_idealPadMap = new IdealPadMap();
+  if (m_idealPadMap->load_from_cdb(Verbosity()) != 0 || !m_idealPadMap->is_loaded())
+  {
+    std::cerr << Name() << "::InitRun - failed to load IdealPadMap" << std::endl;
+    return Fun4AllReturnCodes::ABORTRUN;
+  }
+
   m_event = 0;
   return Fun4AllReturnCodes::EVENT_OK;
+}
+
+double TpcPolyClusterTrackReco::calc_dedx(const TpcPolyClusterTrack* track,
+                                          const TpcPolyHelixFitter::FitResult& fit,
+                                          const bool fit_ok) const
+{
+  if (!track || !fit_ok || !m_idealPadMap)
+  {
+    return std::numeric_limits<double>::quiet_NaN();
+  }
+
+  const double thickness_per_region[4] = {
+    m_idealPadMap->get_layer_thickness(7),
+    m_idealPadMap->get_layer_thickness(8),
+    m_idealPadMap->get_layer_thickness(27),
+    m_idealPadMap->get_layer_thickness(50)
+  };
+
+  std::vector<double> dedxlist;
+  dedxlist.reserve(track->size_clusters());
+  for (unsigned int icluster = 0; icluster < track->size_clusters(); ++icluster)
+  {
+    const unsigned int layer = track->get_cluster_layer(icluster);
+    double thick = std::numeric_limits<double>::quiet_NaN();
+    if (layer < 23U)
+    {
+      thick = thickness_per_region[layer % 2U == 0U ? 1 : 0];
+    }
+    else if (layer < 39U)
+    {
+      thick = thickness_per_region[2];
+    }
+    else
+    {
+      thick = thickness_per_region[3];
+    }
+    if (!std::isfinite(thick) || thick <= 0.0) continue;
+
+    const double x = track->get_cluster_x(icluster);
+    const double y = track->get_cluster_y(icluster);
+    const double r = std::hypot(x, y);
+    if (!std::isfinite(r)) continue;
+
+    double adc = track->get_cluster_adc(icluster) / thick;
+    if (!fit.is_line && std::isfinite(fit.curvature))
+    {
+      const double alpha = 0.5 * r * std::fabs(fit.curvature);
+      double alphacorr = std::cos(alpha);
+      if (alphacorr < 0.0 || alphacorr > 4.0)
+      {
+        alphacorr = 4.0;
+      }
+      adc *= alphacorr;
+    }
+
+    adc *= std::clamp(std::sin(fit.theta), 0.0, 4.0);
+    if (std::isfinite(adc)) dedxlist.push_back(adc);
+  }
+
+  if (dedxlist.empty())
+  {
+    return std::numeric_limits<double>::quiet_NaN();
+  }
+
+  std::sort(dedxlist.begin(), dedxlist.end());
+  const unsigned int trunc_max = static_cast<unsigned int>(dedxlist.size() * 0.7);
+  double sumdedx = 0.0;
+  unsigned int ndedx = 0;
+  for (unsigned int j = 0; j <= trunc_max && j < dedxlist.size(); ++j)
+  {
+    sumdedx += dedxlist[j];
+    ++ndedx;
+  }
+
+  return ndedx > 0U ? sumdedx / static_cast<double>(ndedx) : std::numeric_limits<double>::quiet_NaN();
 }
 
 int TpcPolyClusterTrackReco::getNodes(PHCompositeNode* topNode)
@@ -78,6 +170,7 @@ void TpcPolyClusterTrackReco::fillFinalTrack(const TpcPolyClusterTrack* in,
   out->set_source_full_track_id(in->get_source_full_track_id());
   out->set_fit_status(fit_ok ? 1 : 0);
   out->set_nclusters(in->size_clusters());
+  out->set_dedx(calc_dedx(in, fit, fit_ok));
 
   if (fit_ok)
   {
@@ -100,13 +193,15 @@ void TpcPolyClusterTrackReco::fillFinalTrack(const TpcPolyClusterTrack* in,
       out->set_z(fit.z0);
 
       const double abs_curvature = std::fabs(fit.curvature);
-      const double pt = abs_curvature > 0.0 ? 0.003 * std::fabs(m_magneticFieldTesla) / abs_curvature : 0.0;
+      const double pt = abs_curvature > 0.0 ? 0.003 * (m_magneticFieldTesla) / abs_curvature : 0.0;
       const double tan_theta = std::tan(fit.theta);
       out->set_px(pt * cos_phi);
       out->set_py(pt * sin_phi);
       const double pz = std::fabs(tan_theta) > 1.0e-12 ? (pt / tan_theta) : 0.0;
       out->set_pz(pz);
-      out->set_charge(fit.curvature >= 0.0 ? -1.0 : 1.0);
+      double charge = fit.curvature >= 0.0 ? -1.0 : 1.0;
+      //if (in->get_side() == 1) charge = -charge;
+      out->set_charge(charge);
     }
     out->set_chi2(fit.chi2_xy + fit.chi2_z);
     out->set_ndf(static_cast<double>(fit.ndof_xy + fit.ndof_z));
