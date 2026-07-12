@@ -126,6 +126,7 @@ namespace
   {
     VertexFit fit;
     unsigned int nlayers {0};
+    int side {-1};
   };
 
   struct CollisionFit
@@ -137,6 +138,16 @@ namespace
     double timebin_rms {0.0};
     unsigned int ntracks {0};
   };
+
+  double median(std::vector<double> values)
+  {
+    if (values.empty()) return 0.0;
+    std::sort(values.begin(), values.end());
+    const std::size_t n = values.size();
+    const std::size_t mid = n / 2;
+    if (n % 2 == 1) return values[mid];
+    return 0.5 * (values[mid - 1] + values[mid]);
+  }
 
   unsigned int count_unique_layers(const std::vector<FullTrackVertexer::HitPoint>& pts)
   {
@@ -316,96 +327,88 @@ namespace
   CollisionFit fit_collision_point(const std::vector<CollisionTrack>& tracks)
   {
     CollisionFit result;
-    if (tracks.size() < 2) return result;
+    if (tracks.empty()) return result;
 
-    double sum_w = 0.0;
-    double sum_tbin0 = 0.0;
-    double sum_sin_d0 = 0.0;
-    double sum_cos_d0 = 0.0;
+    std::vector<double> timebins;
+    std::vector<double> phis;
     unsigned int nvalid = 0;
 
     for (const auto& trk : tracks)
     {
       if (!trk.fit.ok || !is_good_number(trk.fit.d0) || !is_good_number(trk.fit.timebin0)) continue;
 
-      const double w = std::max(1.0, static_cast<double>(trk.nlayers));
-      sum_w += w;
-      sum_tbin0 += w * trk.fit.timebin0;
-      sum_sin_d0 += w * std::sin(trk.fit.d0);
-      sum_cos_d0 += w * std::cos(trk.fit.d0);
+      timebins.push_back(trk.fit.timebin0);
+      phis.push_back(wrap_phi(trk.fit.d0));
       ++nvalid;
     }
 
-    if (nvalid < 2 || sum_w <= 0.0 || (sum_sin_d0 == 0.0 && sum_cos_d0 == 0.0)) return result;
+    if (nvalid == 0) return result;
+
+    double sum_sin_d0 = 0.0;
+    double sum_cos_d0 = 0.0;
+    for (const double phi : phis)
+    {
+      sum_sin_d0 += std::sin(phi);
+      sum_cos_d0 += std::cos(phi);
+    }
+
+    const double phi_reference = (sum_sin_d0 == 0.0 && sum_cos_d0 == 0.0)
+      ? phis.front()
+      : std::atan2(sum_sin_d0, sum_cos_d0);
+    for (double& phi : phis)
+    {
+      phi = unwrap_phi_near(phi, phi_reference);
+    }
 
     result.radius = 0.0;
-    result.phi = wrap_phi(std::atan2(sum_sin_d0, sum_cos_d0));
-    result.timebin = sum_tbin0 / sum_w;
+    result.phi = wrap_phi(median(phis));
+    result.timebin = median(timebins);
     if (!is_good_number(result.phi) || !is_good_number(result.timebin)) return result;
 
     double sum_res2 = 0.0;
+    unsigned int nrms = 0;
     for (const auto& trk : tracks)
     {
       if (!trk.fit.ok || !is_good_number(trk.fit.d0) || !is_good_number(trk.fit.timebin0)) continue;
 
-      const double w = std::max(1.0, static_cast<double>(trk.nlayers));
       const double residual = trk.fit.timebin0 - result.timebin;
-      sum_res2 += w * residual * residual;
+      sum_res2 += residual * residual;
+      ++nrms;
     }
 
-    result.timebin_rms = std::sqrt(sum_res2 / sum_w);
+    result.timebin_rms = nrms > 0 ? std::sqrt(sum_res2 / static_cast<double>(nrms)) : 0.0;
     result.ntracks = nvalid;
     result.ok = true;
     return result;
   }
 
-  std::vector<CollisionFit> fit_collision_points(std::vector<CollisionTrack> tracks,
-                                                 const double timebin_separation)
+  std::vector<CollisionFit> fit_collision_points_per_side(std::vector<CollisionTrack> tracks)
   {
     std::vector<CollisionFit> collisions;
-    if (tracks.size() < 2) return collisions;
+    if (tracks.empty()) return collisions;
 
     tracks.erase(std::remove_if(tracks.begin(), tracks.end(),
                                 [](const CollisionTrack& trk)
                                 {
-                                  return !trk.fit.ok || !is_good_number(trk.fit.d0) || !is_good_number(trk.fit.timebin0);
+                                  return trk.side < 0 || trk.side > 1 ||
+                                         !trk.fit.ok ||
+                                         !is_good_number(trk.fit.d0) ||
+                                         !is_good_number(trk.fit.timebin0);
                                 }),
                  tracks.end());
-    if (tracks.size() < 2) return collisions;
+    if (tracks.empty()) return collisions;
 
-    std::sort(tracks.begin(), tracks.end(),
-              [](const CollisionTrack& a, const CollisionTrack& b)
-              {
-                return a.fit.timebin0 < b.fit.timebin0;
-              });
-
-    const double separation = std::max(0.0, timebin_separation);
-    std::vector<CollisionTrack> cluster;
-    cluster.reserve(tracks.size());
-    double cluster_sum_w = 0.0;
-    double cluster_sum_tbin0 = 0.0;
-
-    for (const auto& trk : tracks)
+    for (int side = 0; side < 2; ++side)
     {
-      const double w = std::max(1.0, static_cast<double>(trk.nlayers));
-      const double cluster_timebin0 = cluster_sum_w > 0.0 ? cluster_sum_tbin0 / cluster_sum_w : trk.fit.timebin0;
-
-      if (!cluster.empty() && trk.fit.timebin0 - cluster_timebin0 >= separation)
+      std::vector<CollisionTrack> side_tracks;
+      side_tracks.reserve(tracks.size());
+      for (const auto& trk : tracks)
       {
-        const CollisionFit collision = fit_collision_point(cluster);
-        if (collision.ok) collisions.push_back(collision);
-        cluster.clear();
-        cluster_sum_w = 0.0;
-        cluster_sum_tbin0 = 0.0;
+        if (trk.side == side) side_tracks.push_back(trk);
       }
-
-      cluster.push_back(trk);
-      cluster_sum_w += w;
-      cluster_sum_tbin0 += w * trk.fit.timebin0;
+      const CollisionFit collision = fit_collision_point(side_tracks);
+      if (collision.ok) collisions.push_back(collision);
     }
-
-    const CollisionFit collision = fit_collision_point(cluster);
-    if (collision.ok) collisions.push_back(collision);
 
     return collisions;
   }
@@ -564,11 +567,12 @@ int FullTrackVertexer::process_event(PHCompositeNode* topNode)
       CollisionTrack accepted;
       accepted.fit = fit;
       accepted.nlayers = nlayers;
+      accepted.side = trk->get_side();
       collision_tracks.push_back(accepted);
     }
   }
 
-  const std::vector<CollisionFit> collisions = fit_collision_points(collision_tracks, m_collisionTimebinSeparation);
+  const std::vector<CollisionFit> collisions = fit_collision_points_per_side(collision_tracks);
   m_vertices->set_collision_min_layers(m_collisionMinTrackLayers);
   m_vertices->clear_collision_vertices();
   for (const auto& collision : collisions)
