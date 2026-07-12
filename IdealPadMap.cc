@@ -37,7 +37,7 @@ double IdealPadMap::wrap_phi(const double phi) const
   return out;
 }
 
-int IdealPadMap::load_from_cdb(const int verbosity)
+int IdealPadMap::load_from_cdb(const int /*verbosity*/)
 {
   m_is_loaded = false;
 
@@ -101,17 +101,35 @@ int IdealPadMap::load_from_cdb(const int verbosity)
 
   m_is_loaded = true;
 
-  if (verbosity > 0)
+ // if (verbosity > 0)
   {
     std::cout << "IdealPadMap::load_from_cdb - loaded " << calibdir << std::endl;
     for (unsigned int region = 0; region < N_REGIONS; ++region)
     {
       const unsigned int first_layer = FIRST_LAYER + 16U * region;
+      const unsigned int pads_per_sector = get_pads_per_sector(region);
       std::cout << "  region " << region
                 << " first_layer " << first_layer
-                << " pads_per_sector " << get_pads_per_sector(region)
+                << " pads_per_sector " << pads_per_sector
                 << " total_phibins " << get_total_phibins(first_layer)
                 << std::endl;
+      if (pads_per_sector == 0U) continue;
+
+      const unsigned int first_pad = 0U;
+      const unsigned int last_pad = pads_per_sector - 1U;
+      for (unsigned int side = 0; side < N_SIDES; ++side)
+      {
+        for (unsigned int sector = 0; sector < N_SECTORS; ++sector)
+        {
+          std::cout << "    side " << side
+                    << " sector " << sector
+                    << " first_pad " << first_pad
+                    << " first_phi " << get_phi(side, sector, first_layer, first_pad)
+                    << " last_pad " << last_pad
+                    << " last_phi " << get_phi(side, sector, first_layer, last_pad)
+                    << std::endl;
+        }
+      }
     }
   }
 
@@ -189,7 +207,7 @@ double IdealPadMap::get_phi(const unsigned int side,
   return get_phi(side, sector, layer, local_phibin);
 }
 
-double IdealPadMap::get_phi(const unsigned int side,
+/*double IdealPadMap::get_phi(const unsigned int side,
                             const unsigned int sector,
                             const unsigned int layer,
                             const unsigned int local_phibin) const
@@ -206,8 +224,66 @@ double IdealPadMap::get_phi(const unsigned int side,
                      + (static_cast<double>(sector % N_SECTORS) * M_PI / 6.0);
 
   return wrap_phi(phi);
-}
+}*/
+/*
+double IdealPadMap::get_phi(const unsigned int side,
+                            const unsigned int sector,
+                            const unsigned int layer,
+                            const unsigned int local_phibin) const
+{
+  if (side >= N_SIDES) return std::numeric_limits<double>::quiet_NaN();
+  if (sector >= N_SECTORS) return std::numeric_limits<double>::quiet_NaN();
 
+  unsigned int lookup_phibin = local_phibin;
+  if (side == 1U)
+  {
+    const unsigned int pads_per_sector = get_pads_per_sector_for_layer(layer);
+    if (pads_per_sector == 0U) return std::numeric_limits<double>::quiet_NaN();
+    if (local_phibin >= pads_per_sector) return std::numeric_limits<double>::quiet_NaN();
+    lookup_phibin = pads_per_sector - 1U - local_phibin;
+  }
+
+  const double cdb_phi = get_cdb_local_phi(layer, lookup_phibin);
+  if (!std::isfinite(cdb_phi)) return std::numeric_limits<double>::quiet_NaN();
+
+  // side==1 (north): pad index is reversed before lookup, so the *set* of
+  // phi values assigned to this sector is unchanged, but which pad gets
+  // which phi value is flipped end-to-end.
+  const double phi = ((side == 1U ? 1.0 : -1.0) * (cdb_phi - M_PI / 2.0))
+                     + (static_cast<double>(sector % N_SECTORS) * M_PI / 6.0);
+
+  return wrap_phi(phi);
+}*/
+double IdealPadMap::get_phi(const unsigned int side,
+                            const unsigned int sector,
+                            const unsigned int layer,
+                            const unsigned int local_phibin) const
+{
+  if (side >= N_SIDES) return std::numeric_limits<double>::quiet_NaN();
+  if (sector >= N_SECTORS) return std::numeric_limits<double>::quiet_NaN();
+
+  unsigned int lookup_phibin = local_phibin;
+  if (side == 1U)
+  {
+    const unsigned int pads_per_sector = get_pads_per_sector_for_layer(layer);
+    if (pads_per_sector == 0U) return std::numeric_limits<double>::quiet_NaN();
+    if (local_phibin >= pads_per_sector) return std::numeric_limits<double>::quiet_NaN();
+    lookup_phibin = pads_per_sector - 1U - local_phibin;
+  }
+
+  const double cdb_phi = get_cdb_local_phi(layer, lookup_phibin);
+  if (!std::isfinite(cdb_phi)) return std::numeric_limits<double>::quiet_NaN();
+
+  // The raw sector index (from phibin / pads_per_sector) runs opposite in
+  // direction and offset by 5 relative to the standard sector convention
+  // (confirmed empirically against the sec_min_phi/sec_max_phi geometry dump).
+  const unsigned int mapped_sector = (5U + N_SECTORS - (sector % N_SECTORS)) % N_SECTORS;
+
+  const double phi = ((side == 1U ? 1.0 : -1.0) * (cdb_phi - M_PI / 2.0))
+                     + (static_cast<double>(mapped_sector) * M_PI / 6.0);
+
+  return wrap_phi(phi);
+}
 int IdealPadMap::get_layer_from_fee_channel(const unsigned int fee,
                                             const unsigned int channel) const
 {
