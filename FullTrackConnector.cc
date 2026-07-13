@@ -324,6 +324,8 @@ FullTrackConnector::~FullTrackConnector()
 
 int FullTrackConnector::Init(PHCompositeNode*)
 {
+  if (Verbosity() <= 0) return Fun4AllReturnCodes::EVENT_OK;
+
   m_outputFile = new TFile(m_outputFileName.c_str(), "RECREATE");
   if (!m_outputFile || m_outputFile->IsZombie())
   {

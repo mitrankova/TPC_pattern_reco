@@ -734,6 +734,8 @@ void InModuleTracks::setMaxThreads(unsigned int n)
 
 int InModuleTracks::Init(PHCompositeNode*)
 {
+  if (Verbosity() <= 0) return Fun4AllReturnCodes::EVENT_OK;
+
   m_outputFile = new TFile(m_outputFileName.c_str(), "RECREATE");
   if (!m_outputFile || m_outputFile->IsZombie())
   {
@@ -764,7 +766,9 @@ int InModuleTracks::Init(PHCompositeNode*)
   m_tree->Branch("hit_hitsetkey", &m_tree_hit_hitsetkey);
   m_tree->Branch("hit_hitkey",    &m_tree_hit_hitkey);
 
-  std::cout << Name() << "::Init - output file " << m_outputFileName << " created" << std::endl;
+
+    std::cout << Name() << "::Init - output file " << m_outputFileName << " created" << std::endl;
+  
   return Fun4AllReturnCodes::EVENT_OK;
 }
 
