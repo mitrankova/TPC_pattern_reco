@@ -3,6 +3,7 @@
 #include <fun4all/SubsysReco.h>
 #include <trackbase/TrkrDefs.h>
 
+#include <array>
 #include <string>
 #include <vector>
 
@@ -27,6 +28,14 @@ class TpcPolyClusterizer : public SubsysReco
   void setT0(double v) { m_t0 = v; }
   void setTpcAdcClock(double v) { m_tpcAdcClock = v; }
   void setReverseDriftStepNs(double v) { m_reverseDriftStepNs = v; }
+  void setKEffSide0(double v) { m_kEffSide0 = v; }
+  void setKEffSide1(double v) { m_kEffSide1 = v; }
+  void setCMVoltageDefault(double v) { m_cmVoltageDefault = v; }
+  void setMoveTpc(double x, double y, double z) { m_tpcMove = {{x, y, z}}; }
+  void setRotateTpc(unsigned int index, double x, double y, double z)
+  {
+    if (index < m_tpcRotations.size()) m_tpcRotations[index] = {{x, y, z}};
+  }
   void setStartZ(double south_z, double north_z)
   {
     m_startZSouth = south_z;
@@ -83,6 +92,7 @@ class TpcPolyClusterizer : public SubsysReco
   bool make_xyz_point(TrkrDefs::hitsetkey hsk, TrkrDefs::hitkey hk, PHGarfield* garfield, Point& p) const;
   ClusterParameters make_cluster_parameters(const std::vector<Point>& points, const Centroid& centroid, int side) const;
   static Centroid make_centroid(const std::vector<Point>& points);
+  void configure_garfield(PHGarfield* garfield) const;
   void cluster_sector_side(unsigned int sector,
                            int side,
                            PHGarfield* garfield,
@@ -103,4 +113,9 @@ class TpcPolyClusterizer : public SubsysReco
   double m_reverseDriftStepNs {56.881262};
   double m_startZSouth {-102.325};
   double m_startZNorth {102.325};
+  double m_kEffSide0 {0.0};
+  double m_kEffSide1 {-1.5};
+  double m_cmVoltageDefault {370.0};
+  std::array<double, 3> m_tpcMove {{-0.16775, -0.0337, -0.71365}};
+  std::array<std::array<double, 3>, 2> m_tpcRotations {{{{0.0, 0.01485 / 10.0, 0.0}}, {{0.0298 / 8.0, 0.0, 0.0}}}};
 };

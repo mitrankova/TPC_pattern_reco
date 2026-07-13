@@ -78,22 +78,9 @@ int TpcPolyClusterizer::InitRun(PHCompositeNode* topNode)
   //m_garfield = new PHGarfield(Name() + "_PHGarfield");
 
   const std::string electricFieldMap = "/sphenix/user/mitrankov/garf/include/sphenix_rossegger_garfield_field.root";
-  const double k_eff_side0 = 0.;
-  const double k_eff_side1 = -1.5;
 
-  m_garfield = new PHGarfield(Name() + "_PHGarfield", electricFieldMap, k_eff_side0, k_eff_side1);
-
-  TVector3 Northxyz; Northxyz.SetXYZ(-0.001, -0.001,  1123.109);//mm
-  TVector3 Southxyz; Southxyz.SetXYZ(-3.354, -0.673, -1137.382);//mm
-  TVector3 center=0.5*(Northxyz+Southxyz);//0.5 to get the center of the TPC
-  center*=0.1;//to cm
-  m_garfield->MoveTpc(center.X(),center.Y(),center.Z());
-  m_garfield->RotateTpc(0,0.01485/10,0);//per JohnH
-  m_garfield->RotateTpc(0.0298/8,0,0);//per JohnH
-
-  //m_garfield->SetCMVoltageDefault((43280. - 420.)/102.3);//per grafana
-  m_garfield->SetCMVoltageDefault(370);//per grafana
-  //m_garfield->SetCMVoltageDefault(400);//per grafana
+  m_garfield = new PHGarfield(Name() + "_PHGarfield", electricFieldMap, m_kEffSide0, m_kEffSide1);
+  configure_garfield(m_garfield);
   if (m_garfield->InitRun(topNode) != Fun4AllReturnCodes::EVENT_OK)
   {
     std::cerr << Name() << "::InitRun - PHGarfield InitRun failed" << std::endl;
@@ -105,13 +92,8 @@ int TpcPolyClusterizer::InitRun(PHCompositeNode* topNode)
   m_workerGarfields.reserve(24);
   for (unsigned int i = 0; i < 24; ++i)
   {
-    PHGarfield* worker = new PHGarfield(Name() + "_PHGarfieldWorker" + std::to_string(i), electricFieldMap, k_eff_side0, k_eff_side1);
-    //worker->SetCMVoltageDefault((43280. - 420.)/102.3);//per grafana
-     worker->SetCMVoltageDefault(370);//per grafana
-     worker->MoveTpc(center.X(),center.Y(),center.Z());
-     worker->RotateTpc(0,0.01485/10,0);//per JohnH
-     worker->RotateTpc(0.0298/8,0,0);//per JohnH
-    //worker->SetCMVoltageDefault(400);//per grafana
+    PHGarfield* worker = new PHGarfield(Name() + "_PHGarfieldWorker" + std::to_string(i), electricFieldMap, m_kEffSide0, m_kEffSide1);
+    configure_garfield(worker);
     if (worker->InitRun(topNode) != Fun4AllReturnCodes::EVENT_OK)
     {
       std::cerr << Name() << "::InitRun - PHGarfield worker InitRun failed" << std::endl;
@@ -123,6 +105,18 @@ int TpcPolyClusterizer::InitRun(PHCompositeNode* topNode)
 
   m_event = 0;
   return Fun4AllReturnCodes::EVENT_OK;
+}
+
+void TpcPolyClusterizer::configure_garfield(PHGarfield* garfield) const
+{
+  if (!garfield) return;
+
+  garfield->MoveTpc(m_tpcMove[0], m_tpcMove[1], m_tpcMove[2]);
+  for (const auto& rotation : m_tpcRotations)
+  {
+    garfield->RotateTpc(rotation[0], rotation[1], rotation[2]);
+  }
+  garfield->SetCMVoltageDefault(m_cmVoltageDefault);
 }
 
 int TpcPolyClusterizer::getNodes(PHCompositeNode* topNode)
